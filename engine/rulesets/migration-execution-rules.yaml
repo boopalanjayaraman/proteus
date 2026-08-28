@@ -1,0 +1,1581 @@
+# Migration Execution Rules — how the agent acts
+#
+# Companion to pqc-migration-rules.yaml. That file says what is TRUE about
+# cryptography; this file says what the agent DOES about it. The two have
+# different provenance and must not be merged:
+#
+#   pqc-migration-rules.yaml   every rule quotes a published standard
+#   migration-execution-rules  no standard specifies which tests to generate
+#
+# provenance:
+#   STANDARDS_DERIVED  derived from a rule in pqc-migration-rules.yaml (`derivedFrom`)
+#   SPEC_DERIVED       from the product specification (`specSection`)
+#   ENGINEERING        authored convention; no external authority; may not gate
+#
+# gating: true only for STANDARDS_DERIVED or SPEC_DERIVED.
+#
+# Why this exists at all, given the model can write code unaided: these are the
+# decisions that must be STABLE across runs, not the ones that must be good.
+# `makeProblemKey()` takes a FailureClassification as input — if classification
+# varies between attempts, the same failure yields different problem keys,
+# meaningfulAttempts never reaches 4, and MAX_MEANINGFUL_AUTONOMOUS_ATTEMPTS
+# silently never fires. A guardrail that looks present and is not.
+
+schemaVersion: 1
+
+# HARDWARE_REPLACEMENT and VENDOR_DECISION reach the user by two different paths, and
+# both are needed. Spec §30 lists "hardware must be replaced" and "vendor
+# selection/procurement is required" as human-intervention triggers, so they are gate
+# types; UX v1.1 also surfaces them as Recommendations with owners. Which path applies
+# is decided by ONE question: does an APPROVED plan item depend on the capability?
+#
+#   no  -> RECOMMENDATION, non-blocking   (EXEC-DISP-003 / EXEC-DISP-004 / EXEC-DISP-005)
+#          out of approved scope; the migration completes and the item is carried into
+#          the report with an owner. Blocking here would defeat the one-approval model.
+#   yes -> HUMAN GATE, blocking           (EXEC-ESC-009 / EXEC-ESC-010)
+#          approved work cannot complete without the decision.
+#
+# Both paths carry the same `subtype`, so the user is told WHICH kind of hardware or
+# vendor problem this is regardless of which path surfaced it. "Replace the device" and
+# "the specification is silent" demand different actions from different owners, and
+# collapsing them into one label loses the detail that makes the item actionable.
+
+subtypes:
+  HARDWARE_REPLACEMENT:
+    - FIRMWARE_FIXED_ALGORITHM_SET      # algorithm set fixed in a firmware image; no config path
+    - NO_PQC_CAPABLE_PRODUCT_LISTED     # no PQC-capable model or version yet published
+    - DEVICE_END_OF_LIFE                # out of vendor support; no upgrade path exists
+    - FLEET_REPLACEMENT_REQUIRED        # remedy spans a device population, not one unit
+  VENDOR_DECISION:
+    - CAPABILITY_NOT_DECLARED           # supplied specification is silent on PQC support
+    - VENDOR_ROADMAP_DEPENDENCY         # support announced or planned but not shipped
+    - PROCUREMENT_OR_CONTRACT_REQUIRED  # commercial action needed before any change
+    - EMBEDDED_CRYPTO_NOT_INSPECTABLE   # cryptography embedded in vendor software
+#
+# Sources for the vendor subtypes (documentary, not rules — see pqc-migration-rules.yaml
+# CISA-ACDI-2-003 for the cited rule):
+#   CAPABILITY_NOT_DECLARED / EMBEDDED_CRYPTO_NOT_INSPECTABLE
+#     CISA ACDI Strategy §2 p6: "Agencies may have to identify and request vendors
+#     provide information describing the cryptography algorithms and key lengths"
+#   VENDOR_ROADMAP_DEPENDENCY
+#     CISA ACDI Strategy §2 p5: "vendors will advertise their product plans or roadmaps"
+#   NO_PQC_CAPABLE_PRODUCT_LISTED
+#     CISA ACDI Strategy §3 p9: GSA "list of PQC enabled products (with version numbers)"
+
+policy:
+  maxMeaningfulAutonomousAttempts: 4      # spec §31
+  autonomyBoundary: APPROVED_BRANCH_AND_SANDBOX
+  originalBranch: READ_ONLY
+  productionAccess: NONE
+
+rules:
+
+# ---------------------------------------------------------------------------
+# INVARIANT_CAPTURE — establish the behavioural contract before touching anything
+# ---------------------------------------------------------------------------
+
+  - ruleId: EXEC-INV-001
+    family: INVARIANT_CAPTURE
+    title: Capture the baseline before any source modification
+    provenance: SPEC_DERIVED
+    specSection: "§24 Baseline Behavioural Contract"
+    gating: true
+    stage: CAPTURING_BASELINE
+    when:
+      stageEntered: CAPTURING_BASELINE
+    then:
+      action: RUN_BASELINE_BUILD_AND_TESTS
+      onCommit: BASE_COMMIT
+      persist: [buildResult, testInventory, knownFailures]
+    prohibitedActions: [MODIFY_SOURCE, MODIFY_TEST, MODIFY_MOCK, UPGRADE_DEPENDENCY]
+    rationale: >-
+      A baseline captured after the first change is not a baseline. Everything downstream —
+      BASELINE_INVARIANTS_PRESERVED, the known-failure allowance, the report's before/after —
+      depends on this running against the unmodified base commit.
+
+  - ruleId: EXEC-INV-002
+    family: INVARIANT_CAPTURE
+    title: Pre-existing test failures are recorded, never attributed to the migration
+    provenance: SPEC_DERIVED
+    specSection: "§24"
+    gating: true
+    stage: CAPTURING_BASELINE
+    when:
+      baselineTestStatus: FAILED
+    then:
+      action: RECORD_AS_KNOWN_FAILURE
+      excludeFromVerification: true
+    prohibitedActions: [MODIFY_TEST]
+    rationale: >-
+      A test failing before the migration is not evidence about the migration. Repairing it
+      is out of approved scope, and counting it as a regression would block a correct
+      migration.
+
+  - ruleId: EXEC-INV-003
+    family: INVARIANT_CAPTURE
+    title: Capture the four invariant classes the migration could plausibly break
+    provenance: SPEC_DERIVED
+    specSection: "§24"
+    gating: true
+    stage: CAPTURING_BASELINE
+    when:
+      findingUsageIn: [KEY_ESTABLISHMENT, KEY_TRANSPORT]
+    then:
+      action: CAPTURE_INVARIANTS
+      classifyEachAs: [MUST_PRESERVE, EXPECTED_TO_CHANGE]
+      invariantKinds:
+        - kind: API_BEHAVIOR     # externally observable response contract
+          default: MUST_PRESERVE
+        - kind: FAILURE_MODE     # invalid input still fails, and fails the same way
+          default: MUST_PRESERVE
+        - kind: FUNCTIONAL_OUTCOME
+          default: MUST_PRESERVE
+        - kind: CRYPTO_OUTCOME   # key establishment still succeeds for a valid peer
+          default: MUST_PRESERVE
+          exceptions: [negotiatedAlgorithmIdentifier, sharedSecretEncoding]
+        - kind: MESSAGE_FORMAT   # only where contractually fixed with an external party
+          default: EXPECTED_TO_CHANGE
+          mustPreserveWhen: externallyContractualised
+    prohibitedActions: []
+    rationale: >-
+      Spec §24 names these classes, but capturing them all as must-hold would block the
+      correct migration. RSA-2048 key transport produces a 256-byte ciphertext; ML-KEM-768
+      produces 1088 (FIPS203-8-003). Any invariant that pins ciphertext length, the
+      negotiated algorithm identifier, or the on-wire key encoding is EXPECTED_TO_CHANGE —
+      that change is the migration. MESSAGE_FORMAT therefore defaults to expected-to-change
+      and is only preserved where an external party contractually depends on it, at which
+      point EXEC-ESC-002 applies instead. FAILURE_MODE is the one most often missed and the
+      most dangerous to lose: a migration that turns a rejection into an acceptance passes
+      every happy-path test.
+    schemaNote: >-
+      BehavioralInvariant in schema/src/migration.ts declares `mustHold: z.literal(true)`,
+      which cannot represent an EXPECTED_TO_CHANGE observation. That field needs to become
+      `disposition: MUST_PRESERVE | EXPECTED_TO_CHANGE` before this rule can be implemented.
+
+  - ruleId: EXEC-INV-004
+    family: INVARIANT_CAPTURE
+    title: An invariant must be executable, not descriptive
+    provenance: ENGINEERING
+    gating: false
+    stage: CAPTURING_BASELINE
+    when: {}
+    then:
+      action: REQUIRE_EXECUTABLE_ASSERTION
+      rejectIf: assertionIsProseOnly
+    prohibitedActions: []
+    rationale: >-
+      BASELINE_INVARIANTS_PRESERVED is a deterministic check. An invariant recorded only as
+      English cannot be re-run against the migrated build, so it silently degrades the
+      verification into a model judgment.
+
+# ---------------------------------------------------------------------------
+# TEST_GENERATION — what to generate, and why that and not something else
+# ---------------------------------------------------------------------------
+
+  - ruleId: EXEC-TEST-001
+    family: TEST_GENERATION
+    title: Create characterization tests where no test covers the component to be changed
+    provenance: SPEC_DERIVED
+    specSection: "§25 Test and Mock Generation"
+    gating: true
+    stage: CREATING_TESTS
+    when:
+      componentHasCoveringTests: false
+    then:
+      action: GENERATE_CHARACTERIZATION_TESTS
+      target: currentBehaviour
+      mustPassAgainst: BASE_COMMIT
+    prohibitedActions: [MODIFY_SOURCE]
+    rationale: >-
+      Characterization tests pin what the code does today, not what it should do. Without
+      them a migration cannot be shown to have preserved anything, and the agent is free to
+      change behaviour undetected. They must pass against the unmigrated build — a
+      characterization test that fails on the base commit has documented a bug, not a
+      baseline.
+
+  - ruleId: EXEC-TEST-002
+    family: TEST_GENERATION
+    title: Generated tests must fail against the unmigrated implementation
+    provenance: SPEC_DERIVED
+    specSection: "§25"
+    gating: true
+    stage: VALIDATING_BASELINE_TESTS
+    when:
+      testKind: MIGRATION_ACCEPTANCE_TEST
+    then:
+      action: VALIDATE_AGAINST_BASE_COMMIT
+      expect: FAIL
+      onUnexpectedPass: RAISE_FINDING
+    prohibitedActions: []
+    rationale: >-
+      A new PQC test that already passes before the migration is asserting nothing about the
+      migration. This is the cheapest available detector of a vacuous test, and it runs
+      before any source change.
+
+  - ruleId: EXEC-TEST-003
+    family: TEST_GENERATION
+    title: Assert the ML-KEM-768 key, ciphertext and shared-secret sizes
+    provenance: STANDARDS_DERIVED
+    derivedFrom: [FIPS203-8-003]
+    gating: true
+    stage: CREATING_TESTS
+    when:
+      targetParameterSet: ML-KEM-768
+    then:
+      action: GENERATE_TEST
+      assertions:
+        - encapsulationKeyBytes: 1184
+        - decapsulationKeyBytes: 2400
+        - ciphertextBytes: 1088
+        - sharedSecretBytes: 32
+    prohibitedActions: []
+    rationale: >-
+      Fixed by FIPS 203 Table 3, so these are objective assertions rather than judgments.
+      They also catch the most likely silent failure — a provider that resolves to a
+      different parameter set than the one the plan approved.
+
+  - ruleId: EXEC-TEST-004
+    family: TEST_GENERATION
+    title: Assert that malformed encapsulation keys and ciphertexts are rejected
+    provenance: STANDARDS_DERIVED
+    derivedFrom: [FIPS203-3.3-004, FIPS203-3.2-002]
+    gating: true
+    stage: CREATING_TESTS
+    when:
+      targetFamily: KEM
+    then:
+      action: GENERATE_TEST
+      assertions:
+        # input-check failures — these DO reject (FIPS 203 §7.3)
+        - case: INVALID_LENGTH_OR_FORMAT
+          input: [wrongLengthCiphertext, wrongLengthEncapsulationKey]
+          expect: REJECTED
+        # implicit rejection — valid length, corrupted content. NO error is raised.
+        - case: TAMPERED_VALID_LENGTH_CIPHERTEXT
+          expect: DIFFERENT_SHARED_SECRET
+          mustNotAssert: THROWS
+    prohibitedActions: []
+    rationale: >-
+      FIPS 203 requires Encaps and Decaps to run only on checked inputs, but that is a
+      property of the provider and cannot be established by reading the calling code, so a
+      behavioural test is the only evidence available. The split matters: §7.3 rejects a
+      ciphertext of the wrong LENGTH at the input check, but a tampered ciphertext of the
+      RIGHT length is implicitly rejected — Decaps returns a pseudorandom secret and raises
+      nothing (FIPS203-3.2-002). A generated test asserting "tampered ciphertext throws"
+      would fail against a CORRECT implementation, and the agent would then "repair" working
+      code to satisfy it.
+
+  - ruleId: EXEC-TEST-005
+    family: TEST_GENERATION
+    title: Assert encapsulate/decapsulate round-trip agreement
+    provenance: STANDARDS_DERIVED
+    derivedFrom: [FIPS203-1.1-002, FIPS203-3.2-001]
+    gating: true
+    stage: CREATING_TESTS
+    when:
+      targetFamily: KEM
+    then:
+      action: GENERATE_TEST
+      assertions:
+        - decapsulatedSecretEqualsEncapsulatedSecret: true
+    prohibitedActions: []
+    rationale: >-
+      KEM correctness — K' = K. The single assertion that distinguishes a working migration
+      from one that compiles.
+
+  - ruleId: EXEC-TEST-006
+    family: TEST_GENERATION
+    title: Where key derivation is introduced, assert it uses an approved KDM
+    provenance: STANDARDS_DERIVED
+    derivedFrom: [FIPS203-3.3-002, SP800-227-4.3-001]
+    gating: false
+    stage: CREATING_TESTS
+    when:
+      keyDerivationPresent: true
+    then:
+      action: GENERATE_TEST
+      assertions:
+        - derivationUsesApprovedKdm: true
+    prohibitedActions: []
+    rationale: >-
+      Conditional by design. SP 800-227 §4.3 states a KEM "by definition output[s] a key K
+      that is ready to use", so a test demanding a KDF unconditionally would encode a
+      requirement the standard does not impose — and would push the agent to add one.
+
+  - ruleId: EXEC-TEST-007
+    family: TEST_GENERATION
+    title: Never weaken or delete an assertion that encodes a baseline invariant
+    provenance: SPEC_DERIVED
+    specSection: "§25, §26"
+    gating: true
+    stage: ANY
+    when:
+      proposedChangeTouches: BASELINE_INVARIANT_ASSERTION
+    then:
+      action: RAISE_GATE
+      gateType: BASELINE_CONTRACT_CHANGE
+    prohibitedActions: [MODIFY_TEST, MODIFY_MOCK]
+    rationale: >-
+      Spec §25: the agent must not weaken legitimate behavioural requirements to achieve a
+      passing result. This is the rule that makes that enforceable rather than aspirational,
+      and it is deliberately stage-independent.
+
+# ---------------------------------------------------------------------------
+# MOCK_STRATEGY
+# ---------------------------------------------------------------------------
+
+  - ruleId: EXEC-MOCK-001
+    family: MOCK_STRATEGY
+    title: Classify the failure before modifying any mock
+    provenance: SPEC_DERIVED
+    specSection: "§26 Anti-Test-Cheating Guardrail"
+    gating: true
+    stage: REPAIRING
+    when:
+      proposedChangeType: [MOCK, TEST, FIXTURE]
+    then:
+      action: REQUIRE_TEST_INTEGRITY_RECORD
+      requiredFields: [failureClassification, reason, baselineRequirementChanged, safeAutonomousModification]
+    prohibitedActions: []
+    rationale: >-
+      The MigrationChange schema already refuses a TEST/MOCK/FIXTURE change without a
+      testIntegrity record. This rule is the procedural half: classification happens first,
+      and the edit is justified by it rather than rationalised after it.
+
+  - ruleId: EXEC-MOCK-002
+    family: MOCK_STRATEGY
+    title: Extend a protocol mock; retain the legacy path under an explicit legacy test
+    provenance: ENGINEERING
+    gating: false
+    stage: PREPARING_MOCKS
+    when:
+      mockRepresents: PROTOCOL_COUNTERPART
+      approvedScopeRequiresCoexistence: true
+    then:
+      action: ADD_PROTOCOL_PATH
+      retainLegacyPathUnder: EXPLICIT_LEGACY_TEST
+    prohibitedActions: [REMOVE_LEGACY_ALGORITHM]
+    rationale: >-
+      Conditional on the approved plan requiring classical/PQC coexistence — a hybrid
+      deployment, a peer still on the legacy protocol, or a phased cutover. Where the
+      approved scope replaces the legacy path outright, retaining it is wrong: it preserves
+      coverage of behaviour the migration deliberately removed and leaves dead branches in
+      the test suite. Where coexistence IS required, replacing the mock outright would delete
+      the only remaining coverage of behaviour the system must still interoperate with.
+
+  - ruleId: EXEC-MOCK-003
+    family: MOCK_STRATEGY
+    title: A mock may be adapted only where it represents obsolete behaviour, not changed requirements
+    provenance: SPEC_DERIVED
+    specSection: "§26"
+    gating: true
+    stage: REPAIRING
+    when:
+      failureClassification: MOCK_INCOMPATIBILITY
+      baselineRequirementChanged: false
+    then:
+      action: PERMIT_MOCK_MODIFICATION
+      requiresGate: false
+    prohibitedActions: []
+    rationale: >-
+      The exact case spec §26 authorises: the mock encodes the legacy protocol, the approved
+      scope replaces it, no behavioural requirement changed. The agent proceeds without
+      asking — that is the point of the one-approval model.
+
+  - ruleId: EXEC-MOCK-004
+    family: MOCK_STRATEGY
+    title: Never mock the cryptographic primitive under migration
+    provenance: SPEC_DERIVED
+    specSection: "§25, §26, §34"
+    gating: true
+    stage: ANY
+    when:
+      proposedMockTarget:
+        - KEM_ENCAPSULATION
+        - KEM_DECAPSULATION
+        - SHARED_SECRET_COMPARISON
+        - ALGORITHM_SELECTION
+        - CRYPTO_PROVIDER
+    then:
+      action: REFUSE
+      classification: PROHIBITED_TEST_CONSTRUCTION
+    prohibitedActions: [MODIFY_MOCK, CREATE_TEST]
+    rationale: >-
+      The cheapest possible green suite: stub Encaps/Decaps to return a fixed value and every
+      PQC assertion passes without a line of real cryptography executing. Spec §26 forbids
+      weakening assertions but says nothing about faking the subject of the test, and spec
+      §34 requires verification to rest on tool evidence — a mocked KEM produces evidence of
+      nothing. The primitive being migrated is the one thing that must be exercised for real,
+      including in integration tests. Mocking the PEER (a partner simulator) stays permitted;
+      mocking the PRIMITIVE does not.
+
+# ---------------------------------------------------------------------------
+# FAILURE_CLASSIFICATION — deterministic first, model only for the remainder
+# ---------------------------------------------------------------------------
+
+  - ruleId: EXEC-DIAG-001
+    family: FAILURE_CLASSIFICATION
+    title: Classify deterministically before invoking the model
+    provenance: SPEC_DERIVED
+    specSection: "§29, §46 Deterministic-First Principle"
+    gating: true
+    stage: ANALYZING_FAILURE
+    when:
+      failurePresent: true
+    then:
+      action: APPLY_PATTERN_CLASSIFIERS_FIRST
+      modelFallback: true
+      recordClassificationSource: [DETERMINISTIC, MODEL]
+    prohibitedActions: []
+    rationale: >-
+      problemKey is built from the classification. A model-assigned classification that
+      varies between otherwise identical attempts produces a different problemKey each time,
+      so meaningfulAttempts never increments past 1 and the retry budget never fires. Stable
+      classification is a correctness requirement for the retry mechanism, not a nicety.
+
+  - ruleId: EXEC-DIAG-002
+    family: FAILURE_CLASSIFICATION
+    title: Compilation failure in a file the attempt modified
+    provenance: ENGINEERING
+    gating: false
+    stage: ANALYZING_FAILURE
+    when:
+      phase: BUILD
+      errorMatches: "(cannot find symbol|incompatible types|does not exist|compilation failure)"
+      errorFileInChangedSet: true
+    then:
+      classification: IMPLEMENTATION_DEFECT
+      permitAutonomousRepair: true
+    prohibitedActions: []
+    rationale: The agent's own change did not compile. Unambiguous, and always repairable in scope.
+
+  - ruleId: EXEC-DIAG-003
+    family: FAILURE_CLASSIFICATION
+    title: Dependency resolution or provider lookup failure
+    provenance: ENGINEERING
+    gating: false
+    stage: ANALYZING_FAILURE
+    when:
+      phase: BUILD
+      errorMatches: "(could not resolve|NoSuchAlgorithmException|NoSuchProviderException|version conflict|dependency convergence)"
+    then:
+      classification: DEPENDENCY_INCOMPATIBILITY
+      permitAutonomousRepair: true
+    prohibitedActions: []
+    rationale: >-
+      NoSuchAlgorithmException on an ML-KEM lookup is the expected symptom of a provider
+      that predates the FIPS 203 implementation — the reference scenario's Bouncy Castle
+      1.72 case, and repairable by the approved dependency upgrade.
+
+  - ruleId: EXEC-DIAG-004
+    family: FAILURE_CLASSIFICATION
+    title: Failing assertion names a legacy algorithm and lives only in test or mock code
+    provenance: ENGINEERING
+    gating: false
+    stage: ANALYZING_FAILURE
+    when:
+      phase: [UNIT_TEST, INTEGRATION_TEST]
+      failingAssertionReferences: LEGACY_ALGORITHM
+      referencingFilesAllIn: [TEST, MOCK]
+    then:
+      classification: MOCK_INCOMPATIBILITY
+      permitAutonomousRepair: true
+      requiresTestIntegrityRecord: true
+    prohibitedActions: []
+    rationale: >-
+      The demo's failure. The discriminator is that no production file asserts the legacy
+      algorithm — if one does, the expectation is a real requirement and this rule must not
+      match. Narrow on purpose.
+
+  - ruleId: EXEC-DIAG-005
+    family: FAILURE_CLASSIFICATION
+    title: A failing assertion that encodes a baseline invariant is never a test defect
+    provenance: SPEC_DERIVED
+    specSection: "§26, §30"
+    gating: true
+    stage: ANALYZING_FAILURE
+    when:
+      failingAssertionIsBaselineInvariant: true
+    then:
+      classification: EXPECTED_BEHAVIOR_CHANGE
+      permitAutonomousRepair: false
+      action: RAISE_GATE
+      gateType: BASELINE_CONTRACT_CHANGE
+    prohibitedActions: [MODIFY_TEST, MODIFY_MOCK]
+    rationale: >-
+      Outranks EXEC-DIAG-004. If a baseline invariant is failing, the migration changed
+      required behaviour, and no amount of test archaeology makes that an autonomous repair.
+      Evaluate this rule before the others.
+
+  - ruleId: EXEC-DIAG-006
+    family: FAILURE_CLASSIFICATION
+    title: No test covers the changed component
+    provenance: SPEC_DERIVED
+    specSection: "§29"
+    gating: false
+    stage: ASSESSING_TEST_COVERAGE
+    when:
+      componentHasCoveringTests: false
+    then:
+      classification: TEST_COVERAGE_GAP
+      action: TRIGGER_TEST_GENERATION
+    prohibitedActions: [MODIFY_SOURCE]
+    rationale: >-
+      A coverage gap is a finding about evidence, not about the code. It is resolved by
+      EXEC-TEST-001 before any source change, never by proceeding and hoping.
+
+  - ruleId: EXEC-DIAG-007
+    family: FAILURE_CLASSIFICATION
+    title: Infrastructure failure is not a code failure
+    provenance: ENGINEERING
+    gating: false
+    stage: ANALYZING_FAILURE
+    when:
+      errorMatches: "(connection refused|timed out|429|502|503|no space left|OOMKilled)"
+    then:
+      classification: ENVIRONMENT_FAILURE
+      permitAutonomousRepair: true
+      countsTowardRetryBudget: false
+    prohibitedActions: [MODIFY_SOURCE, MODIFY_TEST, MODIFY_MOCK]
+    rationale: >-
+      Spec §31 permits free routine retries and reserves the budget for meaningful attempts
+      against an unresolved problem. Charging a Cloud Build flake to the budget would
+      exhaust it without a single engineering attempt.
+
+  - ruleId: EXEC-DIAG-008
+    family: FAILURE_CLASSIFICATION
+    title: Unmatched failures are UNKNOWN, and UNKNOWN is not repairable
+    provenance: SPEC_DERIVED
+    specSection: "§29"
+    gating: true
+    stage: ANALYZING_FAILURE
+    when:
+      noClassifierMatched: true
+      modelClassificationConfidence: LOW
+    then:
+      classification: UNKNOWN
+      permitAutonomousRepair: false
+      action: RAISE_GATE
+      gateType: MATERIAL_ARCHITECTURE_DECISION
+    prohibitedActions: [MODIFY_SOURCE, MODIFY_TEST, MODIFY_MOCK]
+    rationale: >-
+      An unclassified failure repaired anyway is a guess with a commit attached. Stopping is
+      the correct autonomous behaviour, and the audit trail records why.
+
+  - ruleId: EXEC-DIAG-009
+    family: FAILURE_CLASSIFICATION
+    title: Build fails outside the changed source set
+    provenance: ENGINEERING
+    gating: false
+    stage: ANALYZING_FAILURE
+    when:
+      phase: BUILD
+      errorFileInChangedSet: false
+      errorMatches: "(plugin execution|toolchain|packaging failed|could not create|enforcer rule)"
+    then:
+      classification: BUILD_DEFECT
+      permitAutonomousRepair: true
+    prohibitedActions: []
+    rationale: >-
+      Separated from IMPLEMENTATION_DEFECT by whether the error names a file the attempt
+      touched. Build tooling failing on an unchanged file is a different problem with a
+      different fix, and conflating the two sends the agent editing source that was working.
+
+  - ruleId: EXEC-DIAG-010
+    family: FAILURE_CLASSIFICATION
+    title: Runtime configuration is missing or invalid
+    provenance: ENGINEERING
+    gating: false
+    stage: ANALYZING_FAILURE
+    when:
+      phase: [UNIT_TEST, INTEGRATION_TEST, DEPLOY]
+      errorMatches: "(could not resolve placeholder|property .* is required|BeanCreationException|Invalid value for configuration|IllegalStateException: Failed to load ApplicationContext)"
+    then:
+      classification: CONFIGURATION_DEFECT
+      permitAutonomousRepair: true
+      restrictRepairTo: [CONFIGURATION]
+    prohibitedActions: [MODIFY_TEST, MODIFY_MOCK]
+    rationale: >-
+      A migration that adds a provider or algorithm property frequently needs a matching
+      configuration entry. Repair is restricted to configuration files: a config defect fixed
+      by editing a test is a config defect hidden, not resolved.
+
+  - ruleId: EXEC-DIAG-011
+    family: FAILURE_CLASSIFICATION
+    title: A fixture encodes data in the legacy format
+    provenance: ENGINEERING
+    gating: false
+    stage: ANALYZING_FAILURE
+    when:
+      phase: [UNIT_TEST, INTEGRATION_TEST]
+      failingInputOriginatesIn: FIXTURE
+      fixtureEncodesLegacyFormat: true
+    then:
+      classification: TEST_FIXTURE_OUTDATED
+      permitAutonomousRepair: true
+      requiresTestIntegrityRecord: true
+    prohibitedActions: []
+    rationale: >-
+      Distinct from MOCK_INCOMPATIBILITY: a mock encodes legacy *behaviour*, a fixture
+      encodes legacy *data* — a stored RSA-wrapped key blob or a recorded handshake. Both are
+      obsolete artifacts, but the repair differs, and the classification is what makes
+      the audit record accurate rather than merely green.
+
+  - ruleId: EXEC-DIAG-012
+    family: FAILURE_CLASSIFICATION
+    title: Failure originates outside the autonomy boundary
+    provenance: SPEC_DERIVED
+    specSection: "§29, §30"
+    gating: true
+    stage: ANALYZING_FAILURE
+    when:
+      failureOriginatesIn: [EXTERNAL_SERVICE, VENDOR_DEPENDENCY, OT_DEVICE, HSM]
+    then:
+      classification: EXTERNAL_DEPENDENCY_BLOCKER
+      permitAutonomousRepair: false
+      action: RAISE_RECOMMENDATION
+      recommendationDisposition: fromDispositionRule
+      countsTowardRetryBudget: false
+    prohibitedActions: [MODIFY_SOURCE, MODIFY_TEST, MODIFY_MOCK, ASSUME_CAPABILITY]
+    rationale: >-
+      The agent cannot fix a partner endpoint or a firmware-fixed algorithm set, and
+      attempting to would mean editing its own side until the symptom disappeared —
+      precisely the behaviour the retry budget exists to stop. Excluded from the budget for
+      the same reason as ENVIRONMENT_FAILURE: burning four attempts on something unfixable
+      would exhaust it before any real engineering was tried. Raises a recommendation with an
+      owner rather than a gate, so unrelated approved work continues.
+
+# ---------------------------------------------------------------------------
+# REPAIR_AUTHORIZATION
+# ---------------------------------------------------------------------------
+
+  - ruleId: EXEC-REP-001
+    family: REPAIR_AUTHORIZATION
+    title: Repairs are confined to the migration branch and disposable environments
+    provenance: SPEC_DERIVED
+    specSection: "§20, §30; Architecture §30"
+    gating: true
+    stage: ANY
+    when: {}
+    then:
+      permittedTargets: [MIGRATION_BRANCH, SANDBOX]
+      forbiddenTargets: [ORIGINAL_BRANCH, PRODUCTION, HSM_CONFIGURATION, VENDOR_FIRMWARE]
+    prohibitedActions: [DEPLOY_SANDBOX]
+    rationale: >-
+      The approval at Screen 3 authorises reversible engineering work inside the branch and
+      sandbox, and nothing else. DEPLOY_SANDBOX is listed as prohibited here because
+      deployment is gated on verification passing (EXEC-REP-004), not on a repair succeeding.
+
+  - ruleId: EXEC-REP-002
+    family: REPAIR_AUTHORIZATION
+    title: Every repair must cite the classification that authorised it
+    provenance: SPEC_DERIVED
+    specSection: "§27, §39"
+    gating: true
+    stage: REPAIRING
+    when:
+      repairProposed: true
+    then:
+      action: REQUIRE_CLASSIFICATION_REFERENCE
+      recordOn: MigrationChange
+    prohibitedActions: []
+    rationale: >-
+      Spec §39 requires every significant step to be auditable. A repair whose justification
+      is not recorded cannot be reviewed, and cannot be distinguished from the agent trying
+      things until the suite went green.
+
+  - ruleId: EXEC-REP-003
+    family: REPAIR_AUTHORIZATION
+    title: Prefer reverting a failed approach over layering a second fix on it
+    provenance: ENGINEERING
+    gating: false
+    stage: REPAIRING
+    when:
+      priorAttemptOnSameProblemKey: {op: gte, value: 2}
+    then:
+      action: REVERT_THEN_RETRY_DIFFERENT_APPROACH
+    prohibitedActions: []
+    rationale: >-
+      Stacked partial fixes make the diff unreviewable and the failure harder to classify on
+      the next cycle. Reverting keeps each attempt independently auditable, which is also
+      what makes the attempt history in the report legible.
+
+  - ruleId: EXEC-REP-004
+    family: REPAIR_AUTHORIZATION
+    title: Sandbox deployment requires deterministic verification to have passed
+    provenance: SPEC_DERIVED
+    specSection: "§34, §35, §36"
+    gating: true
+    stage: SANDBOX_DEPLOYING
+    when:
+      verificationOverall: VERIFIED
+    then:
+      action: PERMIT_SANDBOX_DEPLOY
+    prohibitedActions: []
+    rationale: >-
+      Spec §35 is explicit that tests passing is not migration verified. Deploying before
+      verification would put an unverified build behind a URL the user is invited to trust.
+
+# ---------------------------------------------------------------------------
+# ESCALATION
+# ---------------------------------------------------------------------------
+
+  - ruleId: EXEC-ESC-001
+    family: ESCALATION
+    title: Four meaningful attempts on one problem exhausts the budget
+    provenance: SPEC_DERIVED
+    specSection: "§31 Autonomous Retry Policy"
+    gating: true
+    stage: ANY
+    when:
+      meaningfulAttemptsOnProblemKey: {op: gte, value: 4}
+    then:
+      action: RAISE_GATE
+      gateType: RETRY_BUDGET_EXHAUSTED
+      blocking: false
+      continueUnrelatedWork: true
+    prohibitedActions: [MODIFY_SOURCE, MODIFY_TEST, MODIFY_MOCK]
+    rationale: >-
+      Counted per problemKey, not per run, and only meaningful attempts count —
+      EXEC-DIAG-007 excludes environment flakes. Non-blocking so that independent approved
+      work continues, per spec §30.
+
+  - ruleId: EXEC-ESC-002
+    family: ESCALATION
+    title: A required change to an external protocol is a human decision
+    provenance: SPEC_DERIVED
+    specSection: "§30"
+    gating: true
+    stage: ANY
+    when:
+      changeRequires: EXTERNAL_PROTOCOL_MODIFICATION
+    then:
+      action: RAISE_GATE
+      gateType: EXTERNAL_PROTOCOL_CHANGE
+      blocking: true
+    prohibitedActions: [REPLACE_ALGORITHM, MODIFY_SOURCE, REMOVE_LEGACY_ALGORITHM]
+    rationale: >-
+      Supported on the standards side by PROHIB-002: protocol cryptography is a bilateral
+      contract, and changing it unilaterally breaks the peer rather than migrating it.
+
+  - ruleId: EXEC-ESC-003
+    family: ESCALATION
+    title: Unestablished hardware or vendor capability produces a recommendation, not a gate
+    provenance: STANDARDS_DERIVED
+    derivedFrom: [CISA-ACDI-2-003]
+    gating: false
+    stage: ANY
+    when:
+      nodeTypeIn: [HSM, SECURE_ELEMENT, OT_DEVICE, VENDOR_DEPENDENCY]
+      documentDeclaresPqcCapability: false
+    then:
+      action: RAISE_RECOMMENDATION
+      recommendationDisposition: fromDispositionRule
+      requiresOwner: true
+    prohibitedActions: [ASSUME_CAPABILITY, REPLACE_ALGORITHM, MODIFY_SOURCE]
+    rationale: >-
+      A recommendation, not a gate: the migration is not blocked by an HSM it was never
+      going to touch. Stopping the whole run for something outside the autonomy boundary
+      would defeat the one-approval model, while silently proceeding would imply a
+      capability the specification does not establish. The disposition is taken from
+      whichever EXEC-DISP rule matched rather than fixed here — an earlier version hardcoded
+      HARDWARE_REPLACEMENT for every hardware case, which told the HSM owner to replace a
+      device when the actual finding was that its specification is silent.
+
+  - ruleId: EXEC-ESC-004
+    family: ESCALATION
+    title: Any migration that would weaken security stops
+    provenance: SPEC_DERIVED
+    specSection: "§30"
+    gating: true
+    stage: ANY
+    when:
+      changeWouldReduce: [securityStrength, authenticationAssurance, integrityProtection]
+    then:
+      action: RAISE_GATE
+      gateType: SECURITY_DEGRADATION
+      blocking: true
+    prohibitedActions: [MODIFY_SOURCE, REMOVE_LEGACY_ALGORITHM]
+    rationale: >-
+      The failure mode this whole product must not have: a migration that satisfies the
+      letter of PQC adoption while lowering the security of the system. Relevant concretely
+      where SP800-227-4.2-002 would be violated — pairing an ML-KEM-768 shared secret with
+      a 128-bit symmetric algorithm.
+
+  - ruleId: EXEC-ESC-005
+    family: ESCALATION
+    title: Do not ask for approval for reversible work inside the boundary
+    provenance: SPEC_DERIVED
+    specSection: "§28, §47 Core Agent Instruction"
+    gating: false
+    stage: ANY
+    when:
+      actionIsReversible: true
+      actionWithinBoundary: true
+      noOtherGateApplies: true
+    then:
+      action: PROCEED_WITHOUT_ASKING
+    prohibitedActions: []
+    rationale: >-
+      The stated product thesis, written as a rule so it is checkable. Spec §28 gives the
+      canonical instance: the agent should not ask "Should I update the mock?". An
+      escalation ruleset that only ever adds gates would quietly turn the autonomous
+      engineer back into an assistant.
+
+# ---------------------------------------------------------------------------
+# VERIFICATION — how `verificationOverall: VERIFIED` is actually reached
+#
+# EXEC-REP-004 consumes this state; these rules compute it. Ordered as a
+# pipeline: each stage's evidence is a precondition for the next.
+# ---------------------------------------------------------------------------
+
+  - ruleId: EXEC-VER-001
+    family: VERIFICATION
+    title: Changes must fall within the approved plan's expected scope
+    provenance: SPEC_DERIVED
+    specSection: "§17, §20"
+    gating: true
+    stage: CRYPTO_VERIFYING
+    when: {}
+    then:
+      check: MIGRATION_POLICY_SATISFIED
+      assert: everyChangedPathMatchesAnApprovedPlanItemExpectedChange
+      onViolation: RAISE_GATE
+      gateType: MATERIAL_ARCHITECTURE_DECISION
+    prohibitedActions: []
+    rationale: >-
+      PlanItem.expectedChanges is the autonomy contract the human approved. Verifying the
+      diff against it is what makes "the user approves this scope, not a generic start
+      button" checkable after the fact rather than merely stated before it. A file touched
+      outside the approved scope is a scope breach even if every test passes.
+
+  - ruleId: EXEC-VER-002
+    family: VERIFICATION
+    title: Build must pass at the migration branch head
+    provenance: SPEC_DERIVED
+    specSection: "§34, §35"
+    gating: true
+    stage: CRYPTO_VERIFYING
+    when: {}
+    then:
+      check: BUILD_SUCCESSFUL
+      evidenceFrom: ExecutionRun
+      assert: {kind: BUILD, status: SUCCESS, commitSha: branchHead}
+    prohibitedActions: []
+    rationale: >-
+      Read from ExecutionRun, never asserted. Pinned to the branch head so a green build from
+      an intermediate attempt cannot satisfy the check for a later, different tree.
+
+  - ruleId: EXEC-VER-003
+    family: VERIFICATION
+    title: Every test that passed at baseline must still pass
+    provenance: SPEC_DERIVED
+    specSection: "§24, §35"
+    gating: true
+    stage: CRYPTO_VERIFYING
+    when: {}
+    then:
+      check: REQUIRED_TESTS_PASSED
+      assert: baselinePassingSet.isSubsetOf(currentPassingSet)
+      allowStillFailing: baseline.knownFailures
+    prohibitedActions: []
+    rationale: >-
+      Expressed as a subset relation rather than a pass count, because counts hide
+      substitution: four new tests passing while four old ones broke keeps the total
+      unchanged. Pre-existing failures stay excluded per EXEC-INV-002.
+
+  - ruleId: EXEC-VER-004
+    family: VERIFICATION
+    title: Characterization and acceptance tests must both pass
+    provenance: SPEC_DERIVED
+    specSection: "§25, §35"
+    gating: true
+    stage: CRYPTO_VERIFYING
+    when: {}
+    then:
+      check: REQUIRED_TESTS_PASSED
+      assert:
+        - {testKind: CHARACTERIZATION, expect: PASS}
+        - {testKind: MIGRATION_ACCEPTANCE_TEST, expect: PASS}
+    prohibitedActions: []
+    rationale: >-
+      The pair is the point. Characterization tests passing shows preserved behaviour;
+      acceptance tests passing shows changed behaviour. Either alone is satisfiable by doing
+      nothing or by breaking everything, respectively.
+
+  - ruleId: EXEC-VER-005
+    family: VERIFICATION
+    title: Every MUST_PRESERVE baseline invariant must still hold
+    provenance: SPEC_DERIVED
+    specSection: "§24, §34, §35"
+    gating: true
+    stage: CRYPTO_VERIFYING
+    when: {}
+    then:
+      check: BASELINE_INVARIANTS_PRESERVED
+      assert:
+        - {disposition: MUST_PRESERVE, expect: HOLDS, evidenceFrom: ExecutionRun}
+      report:
+        - {disposition: EXPECTED_TO_CHANGE, expect: RECORDED_WITH_BEFORE_AND_AFTER}
+      onViolation: RAISE_GATE
+      gateType: BASELINE_CONTRACT_CHANGE
+    prohibitedActions: [MODIFY_TEST, MODIFY_MOCK]
+    rationale: >-
+      The first check in spec §35 and the one the whole baseline exists to serve. Every
+      invariant classified MUST_PRESERVE by EXEC-INV-003 is re-executed against the migrated
+      build; a failure is a changed behavioural contract and raises a gate rather than being
+      diagnosed as a test defect — the same precedence EXEC-DIAG-005 enforces during repair.
+      Invariants classified EXPECTED_TO_CHANGE are re-run too, but their results are recorded
+      before-and-after for the report instead of asserted: the ciphertext length changing
+      from 256 to 1088 bytes is the migration working, not a regression. Asserting them would
+      block the correct outcome; omitting them would hide a material change from the reader.
+
+  - ruleId: EXEC-VER-006
+    family: VERIFICATION
+    title: A real ML-KEM round-trip must execute against the resolved provider
+    provenance: STANDARDS_DERIVED
+    derivedFrom: [FIPS203-3.2-001, FIPS203-8-003]
+    gating: true
+    stage: CRYPTO_VERIFYING
+    when:
+      targetFamily: KEM
+    then:
+      check: REQUIRED_PQC_PRESENT
+      assert:
+        - roundTripExecuted: true
+        - mockedPrimitive: false
+        - sharedSecretsMatch: true
+        - parameterSetResolved: approvedParameterSet
+    prohibitedActions: []
+    rationale: >-
+      The check that cannot be satisfied by reading source. Paired with EXEC-MOCK-004:
+      without `mockedPrimitive: false` the whole verification chain is satisfiable by a stub.
+      `parameterSetResolved` catches a provider silently resolving to ML-KEM-512 when the
+      plan approved ML-KEM-768 — the sizes in FIPS203-8-003 make that observable.
+
+  - ruleId: EXEC-VER-007
+    family: VERIFICATION
+    title: The resolved provider must implement the FIPS 203 parameter set the plan approved
+    provenance: STANDARDS_DERIVED
+    derivedFrom: [SP800-227-1.3-001, FIPS203-3.2-001]
+    gating: true
+    stage: CRYPTO_VERIFYING
+    when:
+      targetFamily: KEM
+    then:
+      check: MIGRATION_POLICY_SATISFIED
+      assert:
+        - dependencyResolvedVersion: recordedInEvidence
+        - providerAdvertisesParameterSet: approvedParameterSet
+    prohibitedActions: []
+    rationale: >-
+      SP 800-227 RS1 requires conformance to FIPS 203. The engine cannot establish
+      conformance itself, but it can establish which provider version resolved and that it
+      advertises the approved parameter set — and record that as evidence rather than
+      assuming it.
+
+  - ruleId: EXEC-VER-008
+    family: VERIFICATION
+    title: The prohibited cryptographic path must be absent — scoped to the migrated usage only
+    provenance: STANDARDS_DERIVED
+    derivedFrom: [FIPS203-1.1-001, PROHIB-001]
+    gating: true
+    stage: CRYPTO_VERIFYING
+    when: {}
+    then:
+      check: PROHIBITED_CRYPTO_ABSENT
+      assert:
+        scope: approvedPlanItemFindings
+        absent: {algorithmMatches: "^RSA", usageIn: [KEY_ESTABLISHMENT, KEY_TRANSPORT]}
+      mustNotAssert: absenceOfAlgorithmAcrossAllUsages
+      residualHandling: RECORD_AS_NOTED
+    prohibitedActions: []
+    rationale: >-
+      The scoping is the whole rule. A naive "no RSA anywhere in the tree" check fails the
+      CORRECT migration: the reference scenario deliberately leaves two RSA signature usages
+      untouched and an RSA-signed leaf certificate in place, because PROHIB-001 excludes
+      signatures and PKI is out of approved scope. Absence is asserted only for the
+      algorithm-and-usage pairs the approved plan items actually cover. Everything else that
+      is still RSA is reported through VerificationResult.cryptoAssertions as NOTED — which
+      is why that field carries a third state that the nine gating checks do not.
+
+  - ruleId: EXEC-VER-009
+    family: VERIFICATION
+    title: No critical blocker may remain unresolved
+    provenance: SPEC_DERIVED
+    specSection: "§34, §35"
+    gating: true
+    stage: CRYPTO_VERIFYING
+    when: {}
+    then:
+      check: NO_CRITICAL_BLOCKER
+      assert:
+        - openBlockingGates: 0
+        - findingsInApprovedScopeWithStatus: {not: BLOCKED}
+      ignore: recommendationsWithOwner
+    prohibitedActions: []
+    rationale: >-
+      Recommendations are deliberately excluded. The HSM and OT gateway are unresolved
+      external items with named owners and were never in the approved scope; blocking
+      verification on them would make a correct, fully-delivered migration unverifiable.
+      Only open blocking gates and blocked in-scope findings count.
+
+  - ruleId: EXEC-VER-010
+    family: VERIFICATION
+    title: Sandbox must start and pass its health check before E2E runs
+    provenance: SPEC_DERIVED
+    specSection: "§36"
+    gating: true
+    stage: SANDBOX_DEPLOYING
+    when: {}
+    then:
+      check: SANDBOX_DEPLOYMENT_SUCCESSFUL
+      evidenceFrom: SandboxDeployment
+      assert: {status: READY, startupCheck.passed: true}
+    prohibitedActions: []
+    rationale: >-
+      Separates "deployed" from "running". A Cloud Run revision can exist and serve errors;
+      the startup probe is what distinguishes the two, and E2E results against a dead service
+      are meaningless.
+
+  - ruleId: EXEC-VER-011
+    family: VERIFICATION
+    title: End-to-end scenario must pass against the deployed sandbox
+    provenance: SPEC_DERIVED
+    specSection: "§35, §36"
+    gating: true
+    stage: END_TO_END_VERIFYING
+    when: {}
+    then:
+      check: E2E_VERIFICATION_SUCCESSFUL
+      evidenceFrom: ExecutionRun
+      assert: {kind: E2E_TEST, status: SUCCESS, against: sandboxUrl}
+    prohibitedActions: []
+    rationale: >-
+      Must run against the deployed service, not a local harness. This is the only check that
+      exercises the migrated application as a running system rather than as a build artifact.
+
+  - ruleId: EXEC-VER-012
+    family: VERIFICATION
+    title: VERIFIED is computed from the nine checks, never asserted
+    provenance: SPEC_DERIVED
+    specSection: "§34, §35, §46"
+    gating: true
+    stage: CRYPTO_VERIFYING
+    when: {}
+    then:
+      action: COMPUTE_OVERALL_VERDICT
+      source: computeOverallVerdict(checks)
+      requires: allNineChecksPassOrNotApplicable
+      excludeFromVerdict: cryptoAssertions
+      mustNotAcceptVerdictFrom: MODEL
+    prohibitedActions: []
+    rationale: >-
+      Spec §35: tests passing is not migration verified. The verdict is a pure function of
+      VerificationResult.checks, implemented in computeOverallVerdict() in
+      schema/src/verification.ts, and no model output may set it. cryptoAssertions is
+      narrative and explicitly excluded — its NOTED state must never influence the gate.
+
+  - ruleId: EXEC-VER-013
+    family: VERIFICATION
+    title: The evidence bundle must be complete before the migration is reported complete
+    provenance: SPEC_DERIVED
+    specSection: "§39, §40"
+    gating: true
+    stage: COMPLETED
+    when:
+      verificationOverall: VERIFIED
+    then:
+      action: REQUIRE_ARTIFACTS
+      artifacts: [MIGRATION_REPORT, GIT_DIFF, BUILD_TEST_EVIDENCE]
+      mustReference: [baselineId, approvedAssessmentId, verificationResultId, sandboxDeploymentId]
+      mustCarryForward: openRecommendations
+    prohibitedActions: []
+    rationale: >-
+      Spec §40 makes the evidence package a deliverable, not a by-product. Carrying open
+      recommendations forward is what UX v1.1 requires — the same three items raised at
+      assessment reappear on the completion screen with their owners, rather than quietly
+      disappearing once the migration succeeds.
+
+  - ruleId: EXEC-ESC-006
+    family: ESCALATION
+    title: A change to intended business behaviour is a human decision
+    provenance: SPEC_DERIVED
+    specSection: "§30"
+    gating: true
+    stage: ANY
+    when:
+      changeAlters: INTENDED_BUSINESS_BEHAVIOUR
+    then:
+      action: RAISE_GATE
+      gateType: BUSINESS_BEHAVIOR_CHANGE
+      blocking: true
+    prohibitedActions: [MODIFY_SOURCE, MODIFY_TEST]
+    rationale: >-
+      Distinct from BASELINE_CONTRACT_CHANGE, which fires when an observed invariant breaks.
+      This fires earlier: the agent has determined that completing the migration would
+      require the application to do something different on purpose. Not machine-detectable
+      in general — it is raised when the agent's own diagnosis reaches that conclusion, and
+      the gate exists so that conclusion goes to a human rather than into a commit.
+
+  - ruleId: EXEC-ESC-007
+    family: ESCALATION
+    title: A material performance regression is a human decision
+    provenance: SPEC_DERIVED
+    specSection: "§30"
+    gating: false
+    stage: END_TO_END_VERIFYING
+    when:
+      performanceDeltaExceeds: configuredThreshold
+    then:
+      action: RAISE_GATE
+      gateType: MATERIAL_PERFORMANCE_TRADEOFF
+      blocking: true
+      whenThresholdUnset: REPORT_ONLY
+    prohibitedActions: []
+    rationale: >-
+      PQC key establishment is measurably heavier than RSA — the reference scenario records
+      +4.1ms end to end, which is immaterial, but the same substitution on a hot path may
+      not be. "Material" cannot be defined by the engine: it needs a budget the user has not
+      supplied. Non-gating with `whenThresholdUnset: REPORT_ONLY` so the delta is always
+      measured and reported, and only blocks once someone has stated what too slow means.
+      See gaps.md — this is one of the decisions the corpus and the product both leave open.
+
+  - ruleId: EXEC-ESC-008
+    family: ESCALATION
+    title: Any action requiring access outside the authorised boundary stops immediately
+    provenance: SPEC_DERIVED
+    specSection: "§30; Architecture §30"
+    gating: true
+    stage: ANY
+    when:
+      actionRequiresAccessTo:
+        - PRODUCTION
+        - ORIGINAL_BRANCH_WRITE
+        - HSM_CONFIGURATION
+        - VENDOR_FIRMWARE
+        - CREDENTIALS_NOT_PROVISIONED_FOR_THE_RUN
+    then:
+      action: RAISE_GATE
+      gateType: UNAUTHORIZED_SYSTEM_ACCESS
+      blocking: true
+    prohibitedActions: [MODIFY_SOURCE, MODIFY_CONFIGURATION, DEPLOY_SANDBOX, ASSUME_CAPABILITY]
+    rationale: >-
+      The hardest boundary in the product and the one with the worst failure mode. The
+      approval at Screen 3 authorises the migration branch and the sandbox — nothing else.
+      This is deliberately evaluated before every action rather than at a stage boundary,
+      because the point at which the agent discovers it needs production access is precisely
+      the point at which it must not proceed.
+
+  - ruleId: EXEC-ESC-009
+    family: ESCALATION
+    title: Hardware replacement blocking approved work is a gate, not a recommendation
+    provenance: SPEC_DERIVED
+    specSection: "§30"
+    gating: true
+    stage: ANY
+    when:
+      approvedPlanItemDependsOnCapability: true
+      capabilityUnavailableBecause: HARDWARE
+      nodeTypeIn: [HSM, SECURE_ELEMENT, OT_DEVICE, IOT_DEVICE, SECURITY_APPLIANCE]
+    then:
+      action: RAISE_GATE
+      gateType: HARDWARE_REPLACEMENT
+      subtypeFrom: subtypes.HARDWARE_REPLACEMENT
+      blocking: true
+      continueUnrelatedWork: true
+      alsoRaiseRecommendation: true
+    prohibitedActions: [REPLACE_ALGORITHM, MODIFY_SOURCE, ASSUME_CAPABILITY]
+    rationale: >-
+      Spec §30 names "hardware must be replaced" as a human-intervention trigger. The
+      discriminator against EXEC-DISP-003 is dependency, not device type: an OT gateway the
+      approved scope never touches is a recommendation and the migration completes around
+      it, whereas an approved plan item that cannot land without a device change has to
+      stop. `alsoRaiseRecommendation` because the two carry different information — the gate
+      says work is halted, the recommendation says who must act and what the action is — and
+      the user needs both. `continueUnrelatedWork` keeps the rest of the approved scope
+      moving, per spec §30.
+
+  - ruleId: EXEC-ESC-010
+    family: ESCALATION
+    title: Vendor selection or procurement blocking approved work is a gate
+    provenance: SPEC_DERIVED
+    specSection: "§30"
+    gating: true
+    stage: ANY
+    when:
+      approvedPlanItemDependsOnCapability: true
+      capabilityUnavailableBecause: VENDOR
+    then:
+      action: RAISE_GATE
+      gateType: VENDOR_DECISION
+      subtypeFrom: subtypes.VENDOR_DECISION
+      blocking: true
+      continueUnrelatedWork: true
+      alsoRaiseRecommendation: true
+    prohibitedActions: [UPGRADE_DEPENDENCY, REPLACE_ALGORITHM, ASSUME_CAPABILITY]
+    rationale: >-
+      Spec §30 names "vendor selection/procurement is required". The reference scenario
+      reaches this if the approved dependency upgrade has no released version that advertises
+      the target parameter set — the subtype then distinguishes VENDOR_ROADMAP_DEPENDENCY
+      ("announced, not shipped") from NO_PQC_CAPABLE_PRODUCT_LISTED ("nothing exists yet"),
+      which are the same blockage with entirely different timelines for the owner.
+
+# ---------------------------------------------------------------------------
+# DETECTION — the Java/Maven registry
+#
+# All ENGINEERING provenance and therefore NON-GATING, by construction. NIST
+# publishes no Java regexes, so nothing here can carry a standards citation; a
+# detection rule that gated would be an unsourced assertion blocking a migration.
+# These locate candidates and propose a usage; the standards rules decide what
+# the usage means.
+#
+# Scope: Java 17 / Maven, per the reference scenario. Other languages need their
+# own registry — do not widen these patterns to cover languages untested here.
+# ---------------------------------------------------------------------------
+
+  - ruleId: EXEC-DET-001
+    family: DETECTION_SIGNATURE
+    title: RSA cipher in wrap or unwrap mode is key transport
+    provenance: ENGINEERING
+    gating: false
+    stage: SCANNING_CRYPTO
+    when:
+      fileKind: SOURCE
+      language: Java
+    then:
+      patterns:
+        - 'Cipher\.getInstance\(\s*"RSA[^"]*"'
+        - 'Cipher\.(WRAP_MODE|UNWRAP_MODE)'
+      requireAll: true
+      impliesUsage: KEY_TRANSPORT
+      strength: STRONG
+      extract: {algorithm: RSA, mode: fromCipherTransformString}
+    prohibitedActions: []
+    rationale: >-
+      WRAP_MODE is the discriminator. `Cipher.getInstance("RSA/...")` alone does not
+      establish key transport — the same API encrypts arbitrary payloads — but wrapping a
+      SecretKey is unambiguously key transport, which is what makes the reference scenario's
+      migration technically unambiguous. This is the rule that produces finding f1.
+
+  - ruleId: EXEC-DET-002
+    family: DETECTION_SIGNATURE
+    title: RSA cipher without a wrap mode has undetermined usage
+    provenance: ENGINEERING
+    gating: false
+    stage: SCANNING_CRYPTO
+    when:
+      fileKind: SOURCE
+      language: Java
+    then:
+      patterns: ['Cipher\.getInstance\(\s*"RSA[^"]*"']
+      excludeWhenAlsoMatches: ['Cipher\.(WRAP_MODE|UNWRAP_MODE)']
+      impliesUsage: UNKNOWN
+      strength: WEAK
+      requiresInvestigation: true
+    prohibitedActions: [REPLACE_ALGORITHM]
+    rationale: >-
+      A WEAK signal must never auto-assign usage. RSA-OAEP encrypting an application payload
+      is a different finding with a different disposition from RSA wrapping a session key,
+      and migrating the former to a KEM would be wrong (FIPS203-3.3-001). Produces a finding
+      with usage UNKNOWN for investigation rather than a plan item.
+
+  - ruleId: EXEC-DET-003
+    family: DETECTION_SIGNATURE
+    title: RSA and ECDSA signature APIs are signature usage
+    provenance: ENGINEERING
+    gating: false
+    stage: SCANNING_CRYPTO
+    when:
+      fileKind: SOURCE
+      language: Java
+    then:
+      patterns:
+        - 'Signature\.getInstance\(\s*"[^"]*with(RSA|ECDSA)[^"]*"'
+        - '\.sign\(\)|\.verify\('
+      impliesUsage: DIGITAL_SIGNATURE
+      strength: STRONG
+    prohibitedActions: [REPLACE_ALGORITHM]
+    rationale: >-
+      Detecting signatures accurately is what keeps PROHIB-001 enforceable. The reference
+      repository contains two RSA signature usages that must be found, classified, reported
+      and left alone — silence about them would look identical to having missed them.
+
+  - ruleId: EXEC-DET-004
+    family: DETECTION_SIGNATURE
+    title: Key generation reveals the algorithm and key size
+    provenance: ENGINEERING
+    gating: false
+    stage: SCANNING_CRYPTO
+    when:
+      fileKind: SOURCE
+      language: Java
+    then:
+      patterns:
+        - 'KeyPairGenerator\.getInstance\(\s*"(RSA|EC|DH)"'
+        - '\.initialize\(\s*(\d+)'
+      extract: {algorithm: group1, keySize: group2}
+      strength: STRONG
+    prohibitedActions: []
+    rationale: >-
+      Supplies the `keySize` predicate that several standards rules need but nothing else
+      produces. Note it does NOT supply `securityStrengthBits` — the RSA-2048 to 112-bit
+      mapping is not in this corpus (see IR8547-4.1.2-001), so the transition-timeline rules
+      remain unfirable until that source is added.
+
+  - ruleId: EXEC-DET-005
+    family: DETECTION_SIGNATURE
+    title: Crypto provider dependencies are located, but their capability is not inferred from version
+    provenance: ENGINEERING
+    gating: false
+    stage: ANALYZING_DEPENDENCIES
+    when:
+      fileKind: MANIFEST
+      buildSystem: Maven
+    then:
+      patterns: ['<artifactId>(bcprov|bcpkix|bctls)[^<]*</artifactId>', '<version>([^<]+)</version>']
+      extract: {dependencyName: group1, dependencyVersion: group2}
+      capabilityLookup: providerCapabilityRegistry
+      onCapabilityUnknown: {impliesFinding: true, usage: UNKNOWN, requiresInvestigation: true}
+    prohibitedActions: [ASSUME_CAPABILITY]
+    rationale: >-
+      Deliberately does NOT hardcode a version threshold. "bcprov < 1.78 lacks ML-KEM" is
+      training knowledge, not a corpus fact, and it goes stale. Capability is resolved
+      through `providerCapabilityRegistry` — a maintained data file, not a rule — and where
+      the registry has no entry the finding says so rather than guessing. Definitive
+      confirmation comes at build time from EXEC-VER-007, which observes what the resolved
+      provider actually advertises. This produces finding f2.
+
+  - ruleId: EXEC-DET-006
+    family: DETECTION_SIGNATURE
+    title: Transport cryptography configured declaratively is protocol-managed
+    provenance: ENGINEERING
+    gating: false
+    stage: SCANNING_CRYPTO
+    when:
+      fileKind: CONFIG
+      filePathMatches: 'application\.(yml|yaml|properties)$'
+    then:
+      patterns: ['server\.ssl', 'ssl\.protocol', 'ssl\.ciphers', 'enabled-protocols']
+      sets: {protocolManaged: true}
+      strength: STRONG
+    prohibitedActions: [REPLACE_ALGORITHM, MODIFY_SOURCE]
+    rationale: >-
+      Supplies the `protocolManaged` predicate that PROHIB-002 and
+      SP1800-38B-3.2.2.3-001 depend on and nothing else sets. TLS negotiated by the platform
+      stack is not migrated by editing application code.
+
+  - ruleId: EXEC-DET-007
+    family: DETECTION_SIGNATURE
+    title: Certificates are read for signature algorithm and key length
+    provenance: ENGINEERING
+    gating: false
+    stage: SCANNING_CRYPTO
+    when:
+      fileKind: CERTIFICATE
+    then:
+      extract: [signatureAlgorithm, publicKeyAlgorithm, keyLength, subject, issuer]
+      impliesUsage: CERTIFICATE_VALIDATION
+      strength: STRONG
+    prohibitedActions: [REPLACE_ALGORITHM]
+    rationale: >-
+      The certificate inputs in the closed set were previously unreachable — nothing
+      populated them. Without this the RSA-signed leaf certificate is invisible, and the PKI
+      recommendation (EXEC-DISP-008) has no evidence to attach to.
+
+# ---------------------------------------------------------------------------
+# DISPOSITION — from classified finding to proposed action
+#
+# The join between what the standards establish and what Screen 3 renders.
+# Every Disposition and RecommendationDisposition value must be reachable from
+# exactly one of these rules; ordered most specific first.
+# ---------------------------------------------------------------------------
+
+  - ruleId: EXEC-DISP-001
+    family: DISPOSITION
+    title: Not quantum-vulnerable means no change required
+    provenance: SPEC_DERIVED
+    specSection: "§18"
+    gating: true
+    stage: CORRELATING
+    when:
+      quantumVulnerable: false
+    then:
+      disposition: NO_CHANGE_REQUIRED
+      autonomyBoundary: NOT_APPLICABLE
+    prohibitedActions: [REPLACE_ALGORITHM, MODIFY_SOURCE]
+    rationale: >-
+      Evaluated first so AES-256-GCM at rest and TLS 1.3 already hybrid-ready are dispositioned
+      before any migration rule can reach them. Driven by IR8547-4.1.3-001 and
+      SP1800-38B-3.2.3-002. False positives here are what make a scanner untrustworthy.
+
+  - ruleId: EXEC-DISP-002
+    family: DISPOSITION
+    title: Signature usage is out of scope for a KEM migration
+    provenance: STANDARDS_DERIVED
+    derivedFrom: [PROHIB-001, IR8547-4.1.1-001]
+    gating: true
+    stage: CORRELATING
+    when:
+      usageIn: [DIGITAL_SIGNATURE, CERTIFICATE_VALIDATION]
+    then:
+      disposition: NO_CHANGE_REQUIRED
+      reportAs: OUT_OF_APPROVED_SCOPE
+      autonomyBoundary: OUTSIDE
+    prohibitedActions: [REPLACE_ALGORITHM, MODIFY_SOURCE]
+    rationale: >-
+      Produces f4's disposition. "No change required" here means no change required *by this
+      migration* — IR8547-4.1.1-001 still records the 2030/2035 signature timeline, so the
+      item is reported with its transition dates rather than dismissed.
+
+  - ruleId: EXEC-DISP-003
+    family: DISPOSITION
+    title: Cryptography fixed in vendor firmware is a hardware replacement recommendation
+    provenance: STANDARDS_DERIVED
+    derivedFrom: [CISA-ACDI-2-003]
+    gating: true
+    stage: CORRELATING
+    when:
+      nodeTypeIn: [OT_DEVICE, IOT_DEVICE, SECURITY_APPLIANCE]
+      algorithmSetFixedInFirmware: true
+    then:
+      disposition: HARDWARE_REPLACEMENT
+      autonomyBoundary: OUTSIDE
+      recommendationDisposition: HARDWARE_REPLACEMENT
+      subtype: FIRMWARE_FIXED_ALGORITHM_SET
+      suggestedOwner: "OT engineering · procurement"
+    prohibitedActions: [REPLACE_ALGORITHM, MODIFY_SOURCE, ASSUME_CAPABILITY]
+    rationale: >-
+      Produces f5 and the Gateway-X200 recommendation. The discriminator is that the
+      algorithm set is fixed in a firmware image, so no configuration change can migrate it —
+      which is a different remedy from an HSM whose capability is merely unstated.
+
+  - ruleId: EXEC-DISP-004
+    family: DISPOSITION
+    title: Hardware whose PQC capability is unstated is a human decision, not a replacement
+    provenance: STANDARDS_DERIVED
+    derivedFrom: [CISA-ACDI-2-003]
+    gating: true
+    stage: CORRELATING
+    when:
+      nodeTypeIn: [HSM, SECURE_ELEMENT]
+      documentDeclaresNone: [ML-KEM, ML-DSA, SLH-DSA]
+    then:
+      disposition: HUMAN_DECISION_REQUIRED
+      autonomyBoundary: OUTSIDE
+      recommendationDisposition: HUMAN_DECISION
+      subtype: CAPABILITY_NOT_DECLARED
+      suggestedOwner: "Platform security · vendor management"
+    prohibitedActions: [REPLACE_ALGORITHM, ASSUME_CAPABILITY]
+    rationale: >-
+      The distinction EXEC-ESC-003 previously flattened. A specification that does not list
+      PQC algorithms has not established their absence — it has established that the
+      supplied document is silent, which is a question for the vendor, not grounds to order
+      hardware. Produces the Thales p400 recommendation.
+
+  - ruleId: EXEC-DISP-005
+    family: DISPOSITION
+    title: Vendor-supplied software cryptography is a vendor decision
+    provenance: STANDARDS_DERIVED
+    derivedFrom: [CISA-ACDI-2-003]
+    gating: true
+    stage: CORRELATING
+    when:
+      nodeType: VENDOR_DEPENDENCY
+    then:
+      disposition: VENDOR_DEPENDENCY
+      autonomyBoundary: OUTSIDE
+      recommendationDisposition: VENDOR_DECISION
+      subtype: EMBEDDED_CRYPTO_NOT_INSPECTABLE
+      suggestedOwner: "Vendor management"
+    prohibitedActions: [REPLACE_ALGORITHM, MODIFY_SOURCE, ASSUME_CAPABILITY]
+    rationale: >-
+      Distinct from EXEC-DISP-003: vendor software can be upgraded once the vendor ships PQC
+      support, so the remedy is a roadmap conversation rather than replacing a device.
+
+  - ruleId: EXEC-DISP-006
+    family: DISPOSITION
+    title: Protocol-managed or externally-negotiated cryptography needs investigation
+    provenance: STANDARDS_DERIVED
+    derivedFrom: [SP1800-38B-3.2.2.3-001, PROHIB-002]
+    gating: true
+    stage: CORRELATING
+    when:
+      anyOf:
+        - {protocolManaged: true}
+        - {nodeType: EXTERNAL_SERVICE, peerCapabilityConfirmed: false}
+    then:
+      disposition: NEEDS_FURTHER_INVESTIGATION
+      autonomyBoundary: OUTSIDE
+    prohibitedActions: [REPLACE_ALGORITHM, MODIFY_SOURCE]
+    rationale: >-
+      Produces f6. A partner interface note advertising hybrid support is INFERRED evidence,
+      not a confirmed capability — the graph must not present it as established, and the plan
+      must not depend on it.
+
+  - ruleId: EXEC-DISP-007
+    family: DISPOSITION
+    title: Test and mock code carrying legacy crypto is assisted, not autonomous
+    provenance: SPEC_DERIVED
+    specSection: "§18, §26"
+    gating: true
+    stage: CORRELATING
+    when:
+      nodeType: TEST_MOCK
+      quantumVulnerable: true
+    then:
+      disposition: ASSISTED_MIGRATION
+      conditionalOn: failureClassificationConfirmsObsolete
+      autonomyBoundary: INSIDE
+    prohibitedActions: []
+    rationale: >-
+      Produces f3. Assisted rather than autonomous because the decision to change a mock is
+      not taken at assessment time: it is taken during repair, once a real failure has been
+      classified MOCK_INCOMPATIBILITY with no baseline requirement changed (EXEC-MOCK-003).
+      The plan says "only if", and this disposition is what carries that condition.
+
+  - ruleId: EXEC-DISP-008
+    family: DISPOSITION
+    title: Certificate and PKI dependencies are a follow-on workstream
+    provenance: SPEC_DERIVED
+    specSection: "§18"
+    gating: true
+    stage: CORRELATING
+    when:
+      nodeType: CERTIFICATE
+      usage: CERTIFICATE_VALIDATION
+    then:
+      disposition: NEEDS_FURTHER_INVESTIGATION
+      autonomyBoundary: OUTSIDE
+      recommendationDisposition: FOLLOW_ON_WORKSTREAM
+      suggestedOwner: "PKI team"
+    prohibitedActions: [REPLACE_ALGORITHM, MODIFY_SOURCE]
+    rationale: >-
+      Produces the PKI recommendation. An RSA-signed leaf certificate is not a blocker for a
+      key-transport migration — the two are independent — but it ages out with the wider PKI
+      and must not vanish from the report because it was out of scope.
+
+  - ruleId: EXEC-DISP-009
+    family: DISPOSITION
+    title: In-repository key establishment with an approved target is autonomous
+    provenance: STANDARDS_DERIVED
+    derivedFrom: [FIPS203-1.1-001, FIPS203-1.1-002, FIPS203-8-001]
+    gating: true
+    stage: CORRELATING
+    when:
+      quantumVulnerable: true
+      usageIn: [KEY_ESTABLISHMENT, KEY_TRANSPORT]
+      usageStrength: STRONG
+      locationIn: [SOURCE, MANIFEST, CONFIG]
+      approvedTargetExists: true
+    then:
+      disposition: AUTONOMOUS_MIGRATION
+      autonomyBoundary: INSIDE
+    prohibitedActions: []
+    rationale: >-
+      Evaluated LAST, and the only rule that authorises autonomous change. Every clause is
+      load-bearing: `usageStrength: STRONG` keeps EXEC-DET-002's ambiguous matches out;
+      `locationIn` keeps anything the agent cannot edit out; `approvedTargetExists` requires
+      a MIGRATION_TARGET rule to have fired, so the disposition can never outrun the
+      standards. This produces f1's and f2's disposition and is the entry point to the
+      entire autonomous path.

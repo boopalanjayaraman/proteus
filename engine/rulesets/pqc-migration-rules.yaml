@@ -1,0 +1,1117 @@
+# PQC Migration Rules — standards-derived
+#
+# Extracted from the documents in knowledge/ per engine/prompts/ruleset_extraction_prompt_v2.md
+# Every rule traces to a verbatim quotation from a named standard.
+#
+# authority   NORMATIVE_FINAL | NORMATIVE_DRAFT | INFORMATIVE   — what the DOCUMENT is
+# evidence    OBSERVED | INFERRED                                — whether the rule was derived
+# gating      true only when authority=NORMATIVE_FINAL AND evidence=OBSERVED
+#
+# Companion file: migration-execution-rules.yaml (how the agent acts on these).
+
+schemaVersion: 1
+
+corpus:
+  - document: NIST.FIPS.203.pdf
+    title: Module-Lattice-Based Key-Encapsulation Mechanism Standard
+    pages: 56
+    publisher: NIST
+    status: Final, August 2024
+    authority: NORMATIVE_FINAL
+    tier: A
+  - document: NIST.SP.800-227.pdf
+    title: Recommendations for Key-Encapsulation Mechanisms
+    pages: 64
+    publisher: NIST
+    status: Final, September 2025
+    authority: NORMATIVE_FINAL
+    tier: A
+  - document: NIST.IR.8547.ipd.pdf
+    title: Transition to Post-Quantum Cryptography Standards
+    pages: 29
+    publisher: NIST
+    status: Initial Public Draft, November 2024
+    authority: NORMATIVE_DRAFT
+    tier: B
+  - document: pqc-migration-nist-sp-1800-38b-preliminary-draft.pdf
+    title: "Quantum Readiness: Cryptographic Discovery, Volume B"
+    pages: 68
+    publisher: NIST NCCoE
+    status: Preliminary Draft
+    authority: INFORMATIVE
+    tier: C
+  - document: Strategy-for-Migrating-to-Automated-PQC-Discovery-and-Inventory-Tools.pdf
+    title: Strategy for Migrating to Automated PQC Discovery and Inventory Tools
+    pages: 10
+    publisher: CISA
+    status: August 2024
+    authority: INFORMATIVE
+    tier: C
+
+rules:
+
+# ---------------------------------------------------------------------------
+# FIPS 203 — Tier A, normative final
+# ---------------------------------------------------------------------------
+
+  - ruleId: FIPS203-1.1-001
+    family: ALGORITHM_CLASSIFICATION
+    title: SP 800-56A and SP 800-56B key-establishment schemes are quantum-vulnerable
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: STATEMENT
+    confidence: 1.0
+    machineEvaluable: true
+    gating: true
+    inDemoScope: true
+    when:
+      algorithmMatches: "^(RSA|DH|ECDH|MQV)($|[-_])"
+      usageIn: [KEY_ESTABLISHMENT, KEY_TRANSPORT]
+    then:
+      quantumVulnerable: true
+      severity: CRITICAL
+      impact: MIGRATION_REQUIRED
+    prohibitedActions: []
+    quote: "The key establishment schemes specified in SP 800-56A and SP 800-56B are vulnerable to attacks that use sufficiently-capable quantum computers."
+    source: {document: NIST.FIPS.203.pdf, section: "1.1", page: 10}
+    supersedes: []
+    notes: >-
+      SP 800-56B is the RSA key-establishment (key transport) recommendation; SP 800-56A
+      covers finite-field and elliptic-curve Diffie-Hellman and MQV. This is link (a) of the
+      reference-scenario chain.
+
+  - ruleId: FIPS203-1.1-002
+    family: MIGRATION_TARGET
+    title: ML-KEM is the approved quantum-resistant alternative for key establishment
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: STATEMENT
+    confidence: 1.0
+    machineEvaluable: true
+    gating: true
+    inDemoScope: true
+    when:
+      algorithmMatches: "^(RSA|DH|ECDH|MQV)($|[-_])"
+      usageIn: [KEY_ESTABLISHMENT, KEY_TRANSPORT]
+    then:
+      target: ML-KEM
+      targetFamily: KEM
+      requiresParameterSelection: true
+    prohibitedActions: []
+    quote: "ML-KEM is an approved alternative that is presently believed to be secure, even against adversaries in possession of a large-scale fault-tolerant quantum computer."
+    source: {document: NIST.FIPS.203.pdf, section: "1.1", page: 10}
+    supersedes: []
+    notes: Link (b) of the reference-scenario chain.
+
+  - ruleId: FIPS203-1.1-003
+    family: USAGE_CLASSIFICATION
+    title: A KEM is a key-establishment scheme and nothing else
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: STATEMENT
+    confidence: 1.0
+    machineEvaluable: false
+    gating: false
+    inDemoScope: true
+    when: {}
+    then:
+      impliesUsage: KEY_ESTABLISHMENT
+      strength: STRONG
+    prohibitedActions: []
+    quote: "A key-encapsulation mechanism (KEM) is a set of algorithms that can be used to establish a shared secret key between two parties communicating over a public channel. A KEM is a particular type of key establishment scheme."
+    source: {document: NIST.FIPS.203.pdf, section: "1.1", page: 10}
+    supersedes: []
+    notes: >-
+      A scope definition, not an evaluable predicate — it constrains what a KEM target may
+      be selected for. It is the primary support for PROHIB-001.
+
+  - ruleId: FIPS203-3.2-001
+    family: PARAMETER_SELECTION
+    title: ML-KEM has exactly three approved parameter sets
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: STATEMENT
+    confidence: 1.0
+    machineEvaluable: true
+    gating: true
+    inDemoScope: true
+    when:
+      algorithmMatches: "^ML-KEM"
+    then:
+      approvedParameterSets:
+        - {parameterSet: ML-KEM-512, securityCategory: 1}
+        - {parameterSet: ML-KEM-768, securityCategory: 3}
+        - {parameterSet: ML-KEM-1024, securityCategory: 5}
+      rejectIfNotListed: true
+    prohibitedActions: []
+    quote: "ML-KEM-512 is claimed to be in security category 1, ML-KEM-768 is claimed to be in security category 3, and ML-KEM-1024 is claimed to be in security category 5."
+    source: {document: NIST.FIPS.203.pdf, section: "8", page: 49}
+    supersedes: [IR8547-4.1.2-004]
+    notes: >-
+      Enumeration only — it establishes the closed set of approved parameter sets and
+      rejects anything outside it. Selecting among them is FIPS203-8-001's job; an
+      enumeration rule that also picked a default would conflate "approved" with "chosen".
+      Authoritative over IR 8547 Table 5, which names the two larger parameter sets
+      "ML-DSA-768" and "ML-DSA-1024" inside a table of ML-KEM key-establishment schemes.
+
+  - ruleId: FIPS203-8-001
+    family: PARAMETER_SELECTION
+    title: ML-KEM-768 is the recommended default parameter set
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: SHOULD
+    confidence: 1.0
+    machineEvaluable: true
+    gating: false
+    inDemoScope: true
+    when:
+      algorithmMatches: "^ML-KEM"
+    then:
+      parameterSet: ML-KEM-768
+      securityCategory: 3
+    prohibitedActions: []
+    quote: "NIST recommends using ML-KEM-768 as the default parameter set, as it provides a large security margin at a reasonable performance cost."
+    source: {document: NIST.FIPS.203.pdf, section: "8", page: 49}
+    supersedes: []
+    notes: >-
+      Link (c) of the reference-scenario chain. A recommendation, not a requirement — it
+      informs target selection but must not fail verification, hence gating false.
+
+  - ruleId: FIPS203-8-002
+    family: PARAMETER_SELECTION
+    title: Prefer the strongest practical parameter set when first establishing protection
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: SHOULD
+    confidence: 1.0
+    machineEvaluable: false
+    gating: false
+    inDemoScope: false
+    when: {}
+    then:
+      parameterSet: ML-KEM-1024
+      securityCategory: 5
+    prohibitedActions: []
+    quote: "When initially establishing cryptographic protections for data, the strongest possible parameter set should be used."
+    source: {document: NIST.FIPS.203.pdf, section: "8", page: 49}
+    supersedes: []
+    notes: >-
+      Not machine-evaluable: "possible" depends on performance budget and payload-size
+      tolerance, neither of which the engine observes. Sits in tension with FIPS203-8-001;
+      both are SHOULD, and the document states both, so neither supersedes the other.
+
+  - ruleId: FIPS203-8-003
+    family: VERIFICATION_ASSERTION
+    title: ML-KEM-768 key, ciphertext and shared-secret sizes are fixed
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: STATEMENT
+    confidence: 1.0
+    machineEvaluable: true
+    gating: true
+    inDemoScope: true
+    when:
+      algorithmMatches: "^ML-KEM-768$"
+    then:
+      check: REQUIRED_PQC_PRESENT
+      assertion: PRESENT
+      patterns: ["1184", "2400", "1088", "32"]
+    prohibitedActions: []
+    quote: "Table 3. Sizes (in bytes) of keys and ciphertexts of ML-KEM"
+    source: {document: NIST.FIPS.203.pdf, section: "8", page: 48}
+    supersedes: []
+    notes: >-
+      Table 3, ML-KEM-768 row: encapsulation key 1184 bytes, decapsulation key 2400,
+      ciphertext 1088, shared secret key 32. The quote is the table caption because table
+      rows do not extract as contiguous text; the values are read directly from that table
+      and are therefore OBSERVED. Drives generated size assertions — see EXEC-TEST-003.
+
+  - ruleId: FIPS203-3.3-001
+    family: PROHIBITION
+    title: K-PKE is not approved as a stand-alone public-key encryption scheme
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: SHALL_NOT
+    confidence: 1.0
+    machineEvaluable: true
+    gating: true
+    inDemoScope: true
+    when:
+      algorithmMatches: "^(ML-KEM|K-PKE)"
+      usageIn: [SYMMETRIC_ENCRYPTION]
+    then:
+      prohibits: USE_KEM_AS_GENERAL_ENCRYPTION
+      engineBehaviour: SUPPRESS_PLAN_ITEM
+      reason: >-
+        ML-KEM's internal public-key encryption component is not approved for stand-alone
+        use, so an ML-KEM migration cannot be proposed as a replacement for arbitrary-message
+        encryption.
+    prohibitedActions: [REPLACE_ALGORITHM, MODIFY_SOURCE]
+    quote: "The public-key encryption scheme K-PKE described in Section 5 shall not be used as a stand-alone cryptographic scheme."
+    source: {document: NIST.FIPS.203.pdf, section: "3.3", page: 24}
+    supersedes: []
+    notes: >-
+      FIPS 203 §3.3 continues: the K-PKE algorithms "are not approved for use as a public-key
+      encryption scheme."
+
+  - ruleId: FIPS203-3.3-002
+    family: USAGE_CONSTRAINT
+    title: The ML-KEM shared secret key is directly usable; further derivation must be approved
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: SHALL
+    confidence: 1.0
+    machineEvaluable: true
+    gating: true
+    inDemoScope: true
+    when:
+      algorithmMatches: "^ML-KEM"
+    then:
+      requirement: DERIVED_KEYS_SHALL_USE_APPROVED_KDM
+      verifiableBy: REQUIRED_PATTERN
+      patterns: ["HKDF", "SP800-?108", "SP800-?56C", "KDF", "deriveKey"]
+    prohibitedActions: []
+    quote: "If further key derivation is needed, the final symmetric keys shall be derived from this 256-bit shared secret key in an approved manner, as specified in SP 800-108 and SP 800-56C"
+    source: {document: NIST.FIPS.203.pdf, section: "3.3", page: 25}
+    supersedes: []
+    notes: >-
+      Link (d) of the reference-scenario chain. Note the conditional: the 256-bit shared
+      secret "can be used directly as a shared secret key for symmetric cryptography". A rule
+      demanding a KDF unconditionally would be wrong. The required pattern applies only where
+      derivation is actually performed.
+
+  - ruleId: FIPS203-3.3-003
+    family: USAGE_CONSTRAINT
+    title: ML-KEM-768 requires an approved RBG of at least 192-bit security strength
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: SHALL
+    confidence: 1.0
+    machineEvaluable: true
+    gating: true
+    inDemoScope: true
+    when:
+      algorithmMatches: "^ML-KEM-768$"
+    then:
+      requirement: APPROVED_RBG_MIN_192_BITS
+      verifiableBy: REQUIRED_PATTERN
+      patterns: ["SecureRandom", "DRBG", "getInstanceStrong"]
+    prohibitedActions: []
+    quote: "these random bytes shall be generated using an approved RBG, as prescribed in SP 800-90A, SP 800-90B, and SP 800-90C"
+    source: {document: NIST.FIPS.203.pdf, section: "3.3", page: 25}
+    supersedes: []
+    notes: >-
+      The same paragraph sets the per-parameter-set floor: "at least 128 bits for ML-KEM-512,
+      at least 192 bits for ML-KEM-768, and at least 256 bits for ML-KEM-1024." The patterns
+      are Java-specific and only evidence that *some* RBG is used; they cannot establish that
+      it is approved or correctly strengthed. Treat a pattern miss as a finding, not a pass.
+
+  - ruleId: FIPS203-3.3-004
+    family: USAGE_CONSTRAINT
+    title: Encaps and Decaps inputs must be checked
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: SHALL
+    confidence: 1.0
+    machineEvaluable: false
+    gating: false
+    inDemoScope: true
+    when:
+      algorithmMatches: "^ML-KEM"
+    then:
+      requirement: INPUT_CHECKING_REQUIRED
+      verifiableBy: GENERATED_TEST
+      patterns: []
+    prohibitedActions: []
+    quote: "Implementers shall ensure that ML-KEM.Encaps and ML-KEM.Decaps are only executed on inputs that have been checked, as described in Section 7."
+    source: {document: NIST.FIPS.203.pdf, section: "3.3", page: 25}
+    supersedes: []
+    notes: >-
+      Not statically evaluable — whether checking occurred is a property of the provider
+      implementation, not of the calling code. Verified behaviourally instead: see
+      EXEC-TEST-004, which generates a malformed-key rejection test.
+
+  - ruleId: FIPS203-3.3-005
+    family: USAGE_CONSTRAINT
+    title: Intermediate values must be destroyed before the algorithm terminates
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: SHALL
+    confidence: 1.0
+    machineEvaluable: false
+    gating: false
+    inDemoScope: false
+    when:
+      algorithmMatches: "^ML-KEM"
+    then:
+      requirement: DESTROY_INTERMEDIATE_VALUES
+      verifiableBy: MANUAL_REVIEW
+      patterns: []
+    prohibitedActions: []
+    quote: "implementers shall ensure that intermediate data is destroyed as soon as it is no longer needed"
+    source: {document: NIST.FIPS.203.pdf, section: "3.3", page: 25}
+    supersedes: []
+    notes: >-
+      A property of the cryptographic module, not of application code. In the reference
+      scenario the application calls a validated provider and does not implement ML-KEM, so
+      this constrains provider selection rather than the migration diff. SP 800-227 §3.2
+      (RS5) states the same requirement for KEMs generally; not duplicated as its own rule.
+
+  - ruleId: FIPS203-3.3-006
+    family: USAGE_CONSTRAINT
+    title: ML-KEM implementations must not use floating-point arithmetic
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: SHALL_NOT
+    confidence: 1.0
+    machineEvaluable: false
+    gating: false
+    inDemoScope: false
+    when:
+      algorithmMatches: "^ML-KEM"
+    then:
+      requirement: NO_FLOATING_POINT
+      verifiableBy: MANUAL_REVIEW
+      patterns: []
+    prohibitedActions: []
+    quote: "Implementations of ML-KEM shall not use floating-point arithmetic, as rounding errors in floating-point operations may lead to incorrect results in some cases."
+    source: {document: NIST.FIPS.203.pdf, section: "3.3", page: 26}
+    supersedes: []
+    notes: >-
+      Applies to implementers of the primitive. Retained because it distinguishes "use a
+      validated provider" from "write your own ML-KEM", which is a migration decision the
+      agent could otherwise make silently.
+
+# ---------------------------------------------------------------------------
+# SP 800-227 — Tier A, normative final
+# ---------------------------------------------------------------------------
+
+  - ruleId: SP800-227-1.3-001
+    family: USAGE_CONSTRAINT
+    title: A conforming ML-KEM implementation must comply with FIPS 203
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: SHALL
+    confidence: 1.0
+    machineEvaluable: true
+    gating: true
+    inDemoScope: true
+    when:
+      algorithmMatches: "^ML-KEM"
+    then:
+      requirement: RS1_COMPLY_WITH_FIPS_203
+      verifiableBy: DEPENDENCY_CHECK
+      patterns: []
+    prohibitedActions: []
+    quote: "KEM implementations shall comply with a specific NIST FIPS or SP that specifies the algorithms of the relevant KEM. For example, a conforming implementation of ML-KEM shall comply with FIPS 203"
+    source: {document: NIST.SP.800-227.pdf, section: "1.3 (RS1)", page: 10}
+    supersedes: []
+    notes: >-
+      Verified by establishing that the selected provider version implements FIPS 203
+      ML-KEM, not by scanning application source. Drives the dependency-upgrade plan item.
+
+  - ruleId: SP800-227-1.3-002
+    family: USAGE_CONSTRAINT
+    title: KEM implementations must use approved components meeting the parameter set's strength
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: SHALL
+    confidence: 1.0
+    machineEvaluable: false
+    gating: false
+    inDemoScope: true
+    when:
+      algorithmMatches: "^ML-KEM"
+    then:
+      requirement: RS3_APPROVED_COMPONENTS_MEET_STRENGTH
+      verifiableBy: MANUAL_REVIEW
+      patterns: []
+    prohibitedActions: []
+    quote: "KEM implementations shall use approved components with security strengths that meet or exceed the required strength for each KEM parameter set."
+    source: {document: NIST.SP.800-227.pdf, section: "1.3 (RS3)", page: 10}
+    supersedes: []
+    notes: >-
+      Requires knowing the approval status of every hash and RBG the provider composes,
+      which the engine cannot observe from the repository.
+
+  - ruleId: SP800-227-1.3-003
+    family: USAGE_CONSTRAINT
+    title: Ephemeral KEM key pairs must be used once and destroyed
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: SHALL
+    confidence: 1.0
+    machineEvaluable: false
+    gating: false
+    inDemoScope: true
+    when:
+      algorithmMatches: "^ML-KEM"
+      keyLifecycle: EPHEMERAL
+    then:
+      requirement: RS6_EPHEMERAL_KEYPAIR_SINGLE_USE
+      verifiableBy: GENERATED_TEST
+      patterns: []
+    prohibitedActions: [REUSE_EXISTING_KEY_MATERIAL]
+    quote: "If an application uses an ephemeral key pair, the key pair shall be used for only one execution of key-establishment via a KEM and shall be destroyed as soon as possible after its use."
+    source: {document: NIST.SP.800-227.pdf, section: "1.3 (RS6)", page: 10}
+    supersedes: []
+    notes: >-
+      Conditional by its own terms: the requirement applies only where the application uses
+      an ephemeral key pair, so `keyLifecycle` must be established before it fires. Applying
+      it to every ML-KEM use would forbid the legitimate static-key case the same section
+      goes on to describe. Whether a key pair is ephemeral is a property of application
+      design the engine cannot determine statically, hence machineEvaluable false.
+
+  - ruleId: SP800-227-1.3-004
+    family: USAGE_CONSTRAINT
+    title: A parameter set with application-appropriate security strength must be selected
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: SHALL
+    confidence: 1.0
+    machineEvaluable: false
+    gating: false
+    inDemoScope: true
+    when:
+      algorithmMatches: "^ML-KEM"
+    then:
+      requirement: RM2_APPLICATION_APPROPRIATE_STRENGTH
+      verifiableBy: HUMAN_DECISION
+      patterns: []
+    prohibitedActions: []
+    quote: "In applications of KEMs, a parameter set with an application-appropriate security strength must be selected"
+    source: {document: NIST.SP.800-227.pdf, section: "1.3 (RM2)", page: 11}
+    supersedes: []
+    notes: >-
+      "Application-appropriate" needs protection lifetime and data sensitivity, neither of
+      which the engine holds unless the user supplied them in project instructions. This is
+      why FIPS203-8-001's default recommendation carries the selection in practice — and why
+      that selection is reported rather than asserted. See gaps.md.
+
+  - ruleId: SP800-227-1.3-005
+    family: USAGE_CONSTRAINT
+    title: Ownership assurance is required before using another party's static encapsulation key
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: SHALL
+    confidence: 1.0
+    machineEvaluable: false
+    gating: false
+    inDemoScope: true
+    when:
+      algorithmMatches: "^ML-KEM"
+    then:
+      requirement: RM3_STATIC_KEY_OWNERSHIP_ASSURANCE
+      verifiableBy: MANUAL_REVIEW
+      patterns: []
+    prohibitedActions: []
+    quote: "If an encapsulating party obtains the static encapsulation key of another party, it must have assurance of the other party's ownership of the key before or during the execution of key-establishment."
+    source: {document: NIST.SP.800-227.pdf, section: "1.3 (RM3)", page: 11}
+    supersedes: []
+    notes: >-
+      Directly relevant where a migration replaces an RSA key transport whose peer key
+      arrived with certificate-backed ownership assurance: that assurance must not be lost
+      in the substitution. Not statically checkable; raise as a review item on any plan
+      touching partner key exchange.
+
+  - ruleId: FIPS203-3.2-002
+    family: USAGE_CONSTRAINT
+    title: A tampered valid-length ciphertext is implicitly rejected, not signalled as an error
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: STATEMENT
+    confidence: 1.0
+    machineEvaluable: false
+    gating: false
+    inDemoScope: true
+    when:
+      algorithmMatches: "^ML-KEM"
+    then:
+      requirement: IMPLICIT_REJECTION_YIELDS_DIFFERENT_SECRET_NOT_AN_ERROR
+      verifiableBy: GENERATED_TEST
+      patterns: []
+    prohibitedActions: []
+    quote: "In either case, decapsulation outputs the resulting shared secret key"
+    source: {document: NIST.FIPS.203.pdf, section: "3.2", page: 42}
+    supersedes: []
+    notes: >-
+      Decisive for test generation, and easy to get wrong in a way that fails against a
+      CORRECT implementation. Two different behaviours must not be conflated:
+      a ciphertext of the wrong LENGTH fails the §7.3 input check (FIPS203-3.3-004), whereas
+      a tampered ciphertext of the RIGHT length passes input checking, is decapsulated, and
+      returns a pseudorandom shared secret with no exception raised — "In either case,
+      decapsulation outputs the resulting shared secret key". The correct assertion for
+      tampering is therefore that the decapsulated secret DIFFERS from the encapsulated one,
+      never that a call throws. Drives EXEC-TEST-004.
+
+  - ruleId: SP800-227-4.2-001
+    family: USAGE_CONSTRAINT
+    title: IND-CCA-secure KEMs should be used wherever possible
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: SHOULD
+    confidence: 1.0
+    machineEvaluable: false
+    gating: false
+    inDemoScope: true
+    when: {}
+    then:
+      requirement: PREFER_IND_CCA
+      verifiableBy: MANUAL_REVIEW
+      patterns: []
+    prohibitedActions: []
+    quote: "Whenever possible, IND-CCA-secure KEMs should be used. For some specific applications (e.g., ephemeral key establishment), IND-CPA security might be sufficient."
+    source: {document: NIST.SP.800-227.pdf, section: "4.2", page: 25}
+    supersedes: []
+    notes: >-
+      ML-KEM is IND-CCA2 per FIPS 203 §3.2, so a straightforward ML-KEM migration satisfies
+      this. It becomes live only if a composite or hybrid construction is proposed.
+
+  - ruleId: SP800-227-4.2-002
+    family: USAGE_CONSTRAINT
+    title: Shared secret and derived keys must be used only with appropriately secure symmetric algorithms
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: SHOULD
+    confidence: 1.0
+    machineEvaluable: false
+    gating: false
+    inDemoScope: true
+    when:
+      algorithmMatches: "^ML-KEM"
+    then:
+      requirement: SYMMETRIC_STRENGTH_APPROPRIATE_FOR_APPLICATION
+      verifiableBy: MANUAL_REVIEW
+      patterns: []
+    prohibitedActions: []
+    quote: "The KEM shared secret key and any derived keys should only be used with appropriately secure symmetric-key cryptographic algorithms."
+    source: {document: NIST.SP.800-227.pdf, section: "4.2", page: 27}
+    supersedes: []
+    notes: >-
+      "Appropriately secure" is defined by the application's desired security properties,
+      not by a fixed allow-list. An earlier draft of this rule required AES-192 or above and
+      would have flagged ML-KEM-768 paired with AES-128 — a legitimate configuration where
+      the application targets 128-bit security. The source says only that the symmetric
+      strength should be "appropriate for the security provided by the KEM", which the engine
+      cannot evaluate without the application's target strength. Reported, never asserted.
+
+  - ruleId: SP800-227-4.3-001
+    family: USAGE_CONSTRAINT
+    title: A KEM outputs a key that is ready to use; derivation is conditional and must be approved
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: MAY
+    confidence: 1.0
+    machineEvaluable: true
+    gating: false
+    inDemoScope: true
+    when:
+      algorithmMatches: "^ML-KEM"
+    then:
+      requirement: KDM_ONLY_WHEN_LENGTH_MISMATCHED
+      verifiableBy: REQUIRED_PATTERN
+      patterns: ["SP800-?108", "SP800-?56C", "SP800-?133", "HKDF"]
+    prohibitedActions: []
+    quote: "In contrast, KEMs by definition output a key K that is ready to use."
+    source: {document: NIST.SP.800-227.pdf, section: "4.3", page: 27}
+    supersedes: []
+    notes: >-
+      The section continues that where derivation IS needed, the shared secret key "may be
+      used as a key-derivation key supplied to an approved key-derivation method specified in
+      SP 800-108, SP 800-56C, or SP 800-133". This is the rule that stops the agent inserting
+      a gratuitous KDF into a migration and calling it a requirement.
+
+  - ruleId: SP800-227-4.4-001
+    family: USAGE_CONSTRAINT
+    title: Key confirmation should be used during KEM usage
+    authority: NORMATIVE_FINAL
+    evidenceClass: OBSERVED
+    normativeStrength: SHOULD
+    confidence: 1.0
+    machineEvaluable: true
+    gating: false
+    inDemoScope: true
+    when:
+      algorithmMatches: "^ML-KEM"
+    then:
+      requirement: KEY_CONFIRMATION_RECOMMENDED
+      verifiableBy: GENERATED_TEST
+      patterns: ["HMAC", "CMAC", "KMAC", "GMAC"]
+    prohibitedActions: []
+    quote: "Key confirmation should be used during KEM usage, as it may enhance the security properties of the overall key-establishment process."
+    source: {document: NIST.SP.800-227.pdf, section: "4.4", page: 28}
+    supersedes: []
+    notes: >-
+      SP 800-227 §1.3 explicitly marks the key-confirmation requirements RS6–RS8, RS10 and
+      RS11 as "recommended but not required", so this cannot gate. Where the surrounding
+      protocol already provides confirmation — a TLS handshake MAC, or successful
+      authenticated encryption with the derived key — it is satisfied without new code.
+
+# ---------------------------------------------------------------------------
+# NIST IR 8547 ipd — Tier B, draft. NEVER GATING.
+# ---------------------------------------------------------------------------
+
+  - ruleId: IR8547-4.1-001
+    family: TRANSITION_TIMELINE
+    title: Deprecated is not disallowed
+    authority: NORMATIVE_DRAFT
+    evidenceClass: OBSERVED
+    normativeStrength: STATEMENT
+    confidence: 1.0
+    machineEvaluable: false
+    gating: false
+    inDemoScope: true
+    when: {}
+    then:
+      status: DEPRECATED
+    prohibitedActions: []
+    quote: "Deprecated means that the algorithm and key length/strength may be used, but there is some security risk. The data owner must examine this risk potential and decide whether to continue to use a deprecated algorithm or key length."
+    source: {document: NIST.IR.8547.ipd.pdf, section: "4.1", page: 19}
+    supersedes: []
+    notes: >-
+      DRAFT — initial public draft, dates and terms may change. This is the definitional rule
+      that stops the engine reporting a deprecated algorithm as a failure condition. The
+      same page defines disallowed as "no longer allowed for the stated purpose" and legacy
+      use as processing already-protected data only.
+
+  - ruleId: IR8547-4.1.2-001
+    family: TRANSITION_TIMELINE
+    title: RSA key establishment at 112-bit strength is deprecated after 2030, disallowed after 2035
+    authority: NORMATIVE_DRAFT
+    evidenceClass: OBSERVED
+    normativeStrength: STATEMENT
+    confidence: 1.0
+    machineEvaluable: true
+    gating: false
+    inDemoScope: true
+    when:
+      algorithmMatches: "^RSA"
+      usageIn: [KEY_ESTABLISHMENT, KEY_TRANSPORT]
+      securityStrengthBits: {op: eq, value: 112}
+    then:
+      status: DEPRECATED
+      deprecatedAfter: "2030-12-31"
+      disallowedAfter: "2035-12-31"
+    prohibitedActions: []
+    quote: "Table 4: Quantum-vulnerable key-establishment schemes"
+    source: {document: NIST.IR.8547.ipd.pdf, section: "4.1.2", page: 21}
+    supersedes: []
+    notes: >-
+      DRAFT — never gating. Table 4, RSA [SP800-56B] row: "112 bits of security strength —
+      Deprecated after 2030, Disallowed after 2035". The quote is the table caption because
+      the row does not extract as contiguous text. NOTE: the corpus does not state that
+      RSA-2048 provides 112 bits of security strength — see gaps.md. Without that mapping the
+      engine cannot apply this rule to a detected RSA-2048 usage on evidence from this corpus
+      alone.
+
+  - ruleId: IR8547-4.1.2-002
+    family: TRANSITION_TIMELINE
+    title: Quantum-vulnerable key establishment at 128-bit strength or above is disallowed after 2035
+    authority: NORMATIVE_DRAFT
+    evidenceClass: OBSERVED
+    normativeStrength: STATEMENT
+    confidence: 1.0
+    machineEvaluable: true
+    gating: false
+    inDemoScope: true
+    when:
+      algorithmMatches: "^(RSA|DH|ECDH|MQV)"
+      usageIn: [KEY_ESTABLISHMENT, KEY_TRANSPORT]
+      securityStrengthBits: {op: gte, value: 128}
+    then:
+      status: ACCEPTABLE
+      disallowedAfter: "2035-12-31"
+    prohibitedActions: []
+    quote: "Table 4: Quantum-vulnerable key-establishment schemes"
+    source: {document: NIST.IR.8547.ipd.pdf, section: "4.1.2", page: 21}
+    supersedes: []
+    notes: >-
+      DRAFT — never gating. Table 4 lists Finite Field DH and MQV [SP800-56A], Elliptic Curve
+      DH and MQC [SP800-56A], and RSA [SP800-56B], each with the same two-row transition:
+      112 bits deprecated after 2030 and disallowed after 2035, >=128 bits disallowed after 2035.
+
+  - ruleId: IR8547-4.1.2-003
+    family: MIGRATION_TARGET
+    title: ML-KEM is currently the only approved post-quantum key-establishment scheme
+    authority: NORMATIVE_DRAFT
+    evidenceClass: OBSERVED
+    normativeStrength: STATEMENT
+    confidence: 1.0
+    machineEvaluable: true
+    gating: false
+    inDemoScope: true
+    when:
+      usageIn: [KEY_ESTABLISHMENT, KEY_TRANSPORT]
+    then:
+      target: ML-KEM
+      targetFamily: KEM
+      requiresParameterSelection: true
+    prohibitedActions: []
+    quote: "At this time, ML-KEM is the only approved post-quantum key-establishment scheme based on public key cryptography."
+    source: {document: NIST.IR.8547.ipd.pdf, section: "4.1.2", page: 22}
+    supersedes: []
+    notes: >-
+      DRAFT — never gating. Corroborates FIPS203-1.1-002, which is the gating source. The
+      same passage notes NIST expects to select alternatives to ML-KEM in future, so this
+      rule is explicitly time-bounded.
+
+  - ruleId: IR8547-4.1.2-004
+    family: PARAMETER_SELECTION
+    title: ML-KEM parameter sets and security categories (as printed in Table 5)
+    authority: NORMATIVE_DRAFT
+    evidenceClass: OBSERVED
+    normativeStrength: STATEMENT
+    confidence: 1.0
+    machineEvaluable: false
+    gating: false
+    inDemoScope: false
+    when: {}
+    then:
+      parameterSet: ML-KEM-512
+      securityCategory: 1
+    prohibitedActions: []
+    quote: "Table 5: Post-quantum key-establishment schemes"
+    source: {document: NIST.IR.8547.ipd.pdf, section: "4.1.2", page: 22}
+    supersedes: []
+    notes: >-
+      DRAFT. TRANSCRIPTION NOTE — Table 5 gives the ML-KEM [FIPS203] family and then names
+      its parameter sets "ML-KEM-512", "ML-DSA-768" and "ML-DSA-1024". The latter two are
+      plainly typographical errors for ML-KEM-768 and ML-KEM-1024: ML-DSA is a signature
+      scheme and cannot appear in a table of key-establishment schemes. Transcribed as
+      printed per extraction protocol; superseded by FIPS203-3.2-001, which is Tier A and
+      settles the fact. Recorded in conflicts.md.
+
+  - ruleId: IR8547-4.1.1-001
+    family: TRANSITION_TIMELINE
+    title: RSA and ECDSA digital signatures follow the same 2030/2035 transition
+    authority: NORMATIVE_DRAFT
+    evidenceClass: OBSERVED
+    normativeStrength: STATEMENT
+    confidence: 1.0
+    machineEvaluable: true
+    gating: false
+    inDemoScope: true
+    when:
+      algorithmMatches: "^(RSA|ECDSA|EdDSA)"
+      usage: DIGITAL_SIGNATURE
+    then:
+      status: DEPRECATED
+      deprecatedAfter: "2030-12-31"
+      disallowedAfter: "2035-12-31"
+    prohibitedActions: [REPLACE_ALGORITHM]
+    quote: "Table 2: Quantum-vulnerable digital signature algorithms"
+    source: {document: NIST.IR.8547.ipd.pdf, section: "4.1.1", page: 20}
+    supersedes: []
+    notes: >-
+      DRAFT — never gating. Included so that signature usages are classified and reported
+      rather than silently ignored, while REPLACE_ALGORITHM stays prohibited for them under
+      PROHIB-001. Table 2 rows: ECDSA, EdDSA and RSA, 112 bits deprecated after 2030 and
+      disallowed after 2035; >=128 bits disallowed after 2035. The post-quantum signature
+      targets are ML-DSA and SLH-DSA (Table 3), which are out of scope for this product.
+
+  - ruleId: IR8547-4.1.3-001
+    family: ALGORITHM_CLASSIFICATION
+    title: Approved symmetric primitives at 128-bit strength or above are not quantum-vulnerable in this sense
+    authority: NORMATIVE_DRAFT
+    evidenceClass: OBSERVED
+    normativeStrength: STATEMENT
+    confidence: 1.0
+    machineEvaluable: true
+    gating: false
+    inDemoScope: true
+    when:
+      algorithmMatches: "^(AES|SHA-?2|SHA-?3|SHAKE|HMAC|ChaCha20)"
+      usageIn: [SYMMETRIC_ENCRYPTION, HASHING, MAC]
+    then:
+      quantumVulnerable: false
+      severity: INFO
+      impact: NO_PQC_CHANGE_REQUIRED
+    prohibitedActions: [REPLACE_ALGORITHM]
+    quote: "all NIST-approved symmetric primitives that provide at least 128 bits of classical security are believed to meet the requirements of at least Category 1 security"
+    source: {document: NIST.IR.8547.ipd.pdf, section: "4.1.3", page: 22}
+    supersedes: []
+    notes: >-
+      DRAFT — never gating, but decisive for suppressing false positives: it is why AES-256-GCM
+      data-at-rest is reported NO_PQC_CHANGE_REQUIRED rather than as a finding. The same
+      section warns that 112-bit symmetric standards "will be disallowed in 2030".
+
+  - ruleId: IR8547-3.2.1-001
+    family: HYBRID_CONSTRUCTION
+    title: An ML-KEM shared secret may be used as the Z value in the SP 800-56C composite mode
+    authority: NORMATIVE_DRAFT
+    evidenceClass: OBSERVED
+    normativeStrength: MAY
+    confidence: 1.0
+    machineEvaluable: false
+    gating: false
+    inDemoScope: true
+    when: {}
+    then:
+      hybridPermitted: true
+      combinerSpec: "SP 800-56C generic composite, Z' = Z || T"
+      componentsRequired: [ML-KEM]
+    prohibitedActions: []
+    quote: "NIST emphasizes that any shared secret key generated as specified in FIPS 203 may be used as the value Z in the generic composite mode described in SP 800-56C."
+    source: {document: NIST.IR.8547.ipd.pdf, section: "3.2.1", page: 17}
+    supersedes: []
+    notes: >-
+      DRAFT — never gating. Relevant where an external peer advertises hybrid key
+      establishment. IR 8547 §3.2 also cautions that hybrids "add complexity to
+      implementations and architectures, which can increase security risks and costs" and are
+      "typically expected to be temporary measures" — so a hybrid is never the default plan.
+
+# ---------------------------------------------------------------------------
+# SP 1800-38B — Tier C, informative
+# ---------------------------------------------------------------------------
+
+  - ruleId: SP1800-38B-3.2.3-001
+    family: ALGORITHM_CLASSIFICATION
+    title: RSA encryption and RSA signature are separately enumerated vulnerable algorithms
+    authority: INFORMATIVE
+    evidenceClass: OBSERVED
+    normativeStrength: STATEMENT
+    confidence: 1.0
+    machineEvaluable: true
+    gating: false
+    inDemoScope: true
+    when:
+      algorithmMatches: "^(RSA|ECDH|MQV|ECDSA|DH|DSA|EdDSA)"
+    then:
+      quantumVulnerable: true
+      severity: HIGH
+      impact: MIGRATION_REQUIRED
+    prohibitedActions: []
+    quote: "In this demonstration, the algorithms listed in Table 3 are considered vulnerable."
+    source: {document: pqc-migration-nist-sp-1800-38b-preliminary-draft.pdf, section: "3.2.3", page: 25}
+    supersedes: []
+    notes: >-
+      INFORMATIVE, preliminary draft — never gating. Table 3 lists ECDH, MQV, ECDSA, DH,
+      "RSA Encryption Algorithm" (SP 800-56B Rev. 2), "RSA Signature Algorithm" (FIPS 186-5),
+      DSA and EdDSA. The separation of RSA encryption from RSA signature in a NIST-published
+      inventory is the corroboration for treating usage as the discriminator.
+
+  - ruleId: SP1800-38B-3.2.3-002
+    family: ALGORITHM_CLASSIFICATION
+    title: Symmetric primitives are out of scope for PQC discovery
+    authority: INFORMATIVE
+    evidenceClass: OBSERVED
+    normativeStrength: STATEMENT
+    confidence: 1.0
+    machineEvaluable: true
+    gating: false
+    inDemoScope: true
+    when:
+      algorithmMatches: "^(AES|SHA|SHAKE|HMAC|ChaCha20)"
+    then:
+      quantumVulnerable: false
+      severity: INFO
+      impact: NO_PQC_CHANGE_REQUIRED
+    prohibitedActions: [REPLACE_ALGORITHM]
+    quote: "Symmetric cryptographic primitives, such as block ciphers and hash functions, are not as drastically impacted by the advent of a (cryptographically relevant) quantum computer [9] and are not in scope for this project."
+    source: {document: pqc-migration-nist-sp-1800-38b-preliminary-draft.pdf, section: "3.2.3", page: 24}
+    supersedes: []
+    notes: INFORMATIVE, preliminary draft. Corroborates IR8547-4.1.3-001.
+
+  - ruleId: SP1800-38B-3.2.2.3-001
+    family: DISPOSITION
+    title: TLS, SSH and IPsec cryptography is protocol-managed
+    authority: INFORMATIVE
+    evidenceClass: OBSERVED
+    normativeStrength: STATEMENT
+    confidence: 1.0
+    machineEvaluable: true
+    gating: false
+    inDemoScope: true
+    when:
+      protocolManaged: true
+    then:
+      disposition: NEEDS_FURTHER_INVESTIGATION
+      autonomyBoundary: OUTSIDE
+      suggestedOwner: Platform engineering
+    prohibitedActions: [REPLACE_ALGORITHM, MODIFY_SOURCE]
+    quote: "Contemporary versions of TLS make use of X.509 certificates and corresponding private keys which rely on quantum-vulnerable signature and key exchange algorithms."
+    source: {document: pqc-migration-nist-sp-1800-38b-preliminary-draft.pdf, section: "3.2.2.3", page: 24}
+    supersedes: []
+    notes: >-
+      INFORMATIVE, preliminary draft. Protocol-negotiated cryptography cannot be migrated
+      unilaterally from application code without breaking the peer, so the agent must not
+      rewrite it. See PROHIB-002.
+
+# ---------------------------------------------------------------------------
+# CISA ACDI Strategy — Tier C, informative. Publisher is CISA, not NIST.
+# ---------------------------------------------------------------------------
+
+  - ruleId: CISA-ACDI-2-001
+    family: INVENTORY_FIELD
+    title: Each vulnerable cryptographic system records algorithm, service provided and key length
+    authority: INFORMATIVE
+    evidenceClass: OBSERVED
+    normativeStrength: STATEMENT
+    confidence: 1.0
+    machineEvaluable: true
+    gating: false
+    inDemoScope: true
+    when: {}
+    then:
+      field: [algorithm, serviceProvided, keyLength]
+      required: true
+      automatable: true
+      appliesTo: CRYPTOGRAPHIC_SYSTEM
+    prohibitedActions: []
+    quote: "Item 4 - For CRQC-vulnerable cryptographic system inventory elements (report):"
+    source: {document: Strategy-for-Migrating-to-Automated-PQC-Discovery-and-Inventory-Tools.pdf, section: "2", page: 5}
+    supersedes: []
+    notes: >-
+      Publisher is CISA, not NIST. INFORMATIVE. Item 4 of the nine M-23-02 data items, and
+      one of only three the strategy considers automatable. "Service provided" is defined on
+      page 4 as one of: creation and exchange of encryption keys; encrypted connections; or
+      creation and validation of digital signatures — which maps onto CryptoUsage.
+
+  - ruleId: CISA-ACDI-2-002
+    family: INVENTORY_FIELD
+    title: Software package provenance and operating system are inventory fields
+    authority: INFORMATIVE
+    evidenceClass: OBSERVED
+    normativeStrength: STATEMENT
+    confidence: 1.0
+    machineEvaluable: true
+    gating: false
+    inDemoScope: false
+    when: {}
+    then:
+      field: [softwarePackageProvenance, vendorName, operatingSystem]
+      required: true
+      automatable: true
+      appliesTo: CRYPTOGRAPHIC_SYSTEM
+    prohibitedActions: []
+    quote: "Item 6 - Operating system(s), including major and minor version information, if applicable."
+    source: {document: Strategy-for-Migrating-to-Automated-PQC-Discovery-and-Inventory-Tools.pdf, section: "2", page: 5}
+    supersedes: []
+    notes: >-
+      Publisher is CISA. Items 5 and 6. Item 5 distinguishes Commercial-Off-the-Shelf,
+      Government-Off-the-Shelf and custom software, each with a vendor or developer name —
+      which is what makes vendor-controlled cryptography identifiable in an inventory.
+
+  - ruleId: CISA-ACDI-2-003
+    family: PROHIBITION
+    title: Embedded and vendor-supplied cryptography must not be assumed discoverable or PQC-capable
+    authority: INFORMATIVE
+    evidenceClass: OBSERVED
+    normativeStrength: STATEMENT
+    confidence: 1.0
+    machineEvaluable: true
+    gating: false
+    inDemoScope: true
+    when:
+      nodeType: VENDOR_DEPENDENCY
+    then:
+      prohibits: ASSUME_VENDOR_PQC_CAPABILITY
+      engineBehaviour: FORCE_DISPOSITION
+      forcedDisposition: VENDOR_DEPENDENCY
+      reason: >-
+        Cryptography embedded in vendor-supplied software or firmware is not reliably
+        discoverable by automated tooling, and its PQC capability must be obtained from the
+        vendor rather than inferred.
+    prohibitedActions: [ASSUME_CAPABILITY, REPLACE_ALGORITHM, MODIFY_SOURCE]
+    quote: "Additionally, software packages with embedded cryptography, customized applications, or certain operating systems may not be discoverable using automated tools. Agencies may have to identify and request vendors provide information describing the cryptography algorithms and key lengths for these software packages."
+    source: {document: Strategy-for-Migrating-to-Automated-PQC-Discovery-and-Inventory-Tools.pdf, section: "2", page: 6}
+    supersedes: []
+    notes: >-
+      Publisher is CISA. INFORMATIVE, so non-gating — but paired with EXEC-ESC-003 it is what
+      produces a recommendation with an owner rather than an autonomous change, for the HSM
+      and OT-gateway cases.
+
+# ---------------------------------------------------------------------------
+# Cross-document prohibitions
+# ---------------------------------------------------------------------------
+
+  - ruleId: PROHIB-001
+    family: PROHIBITION
+    title: A signature usage must not be migrated to a KEM
+    authority: NORMATIVE_FINAL
+    evidenceClass: INFERRED
+    normativeStrength: SHALL_NOT
+    confidence: 0.9
+    machineEvaluable: true
+    gating: false
+    inDemoScope: true
+    when:
+      algorithmMatches: "^(RSA|ECDSA|EdDSA|DSA)"
+      usageIn: [DIGITAL_SIGNATURE, CERTIFICATE_VALIDATION]
+    then:
+      prohibits: MIGRATE_TO_KEM
+      engineBehaviour: SUPPRESS_PLAN_ITEM
+      reason: >-
+        A KEM establishes a shared secret key and is not a signature scheme. An RSA signature
+        usage is out of scope for an ML-KEM migration and must be reported separately.
+    prohibitedActions: [REPLACE_ALGORITHM, MODIFY_SOURCE]
+    quote: "A KEM is a particular type of key establishment scheme."
+    source: {document: NIST.FIPS.203.pdf, section: "1.1", page: 10}
+    supersedes: []
+    notes: >-
+      INFERRED, therefore NON-GATING despite a Tier A source. No document in this corpus
+      states the prohibition directly; it is derived from FIPS203-1.1-003 (a KEM is a key
+      establishment scheme) combined with SP1800-38B-3.2.3-001 (RSA Signature and RSA
+      Encryption are separate entries with separate specifications). This is the single most
+      important prohibition in the product and it deserves a direct citation — FIPS 204 or
+      SP 800-131A would likely supply one. Logged in requires-source.md.
+
+  - ruleId: PROHIB-002
+    family: PROHIBITION
+    title: Protocol-managed cryptography must not be rewritten in application code
+    authority: INFORMATIVE
+    evidenceClass: INFERRED
+    normativeStrength: SHALL_NOT
+    confidence: 0.75
+    machineEvaluable: true
+    gating: false
+    inDemoScope: true
+    when:
+      protocolManaged: true
+    then:
+      prohibits: UNILATERAL_PROTOCOL_CHANGE
+      engineBehaviour: RAISE_GATE
+      reason: >-
+        Cryptography negotiated by a protocol stack is a bilateral contract with the peer.
+        Changing it from one side breaks interoperability.
+    prohibitedActions: [REPLACE_ALGORITHM, MODIFY_SOURCE, REMOVE_LEGACY_ALGORITHM]
+    quote: "Modern network security protocols tend to use separate asymmetric keys for key establishment and authentication."
+    source: {document: NIST.IR.8547.ipd.pdf, section: "3.1.3", page: 15}
+    supersedes: []
+    notes: >-
+      INFERRED from a DRAFT source — non-gating on both counts. IR 8547 §3.2 supports the
+      interoperability concern ("quantum-vulnerable and quantum-resistant cryptographic
+      algorithms will be fielded and used alongside each other in many applications and
+      systems during the transition to PQC to facilitate interoperability") but states no
+      prohibition. Logged in requires-source.md.
+
+  - ruleId: PROHIB-003
+    family: PROHIBITION
+    title: Existing RSA or ECC key material must not be reused as ML-KEM key material
+    authority: NORMATIVE_FINAL
+    evidenceClass: INFERRED
+    normativeStrength: SHALL_NOT
+    confidence: 0.85
+    machineEvaluable: false
+    gating: false
+    inDemoScope: true
+    when:
+      algorithmMatches: "^ML-KEM"
+    then:
+      prohibits: REUSE_CLASSICAL_KEY_MATERIAL
+      engineBehaviour: RAISE_GATE
+      reason: >-
+        ML-KEM encapsulation and decapsulation keys are structurally distinct from RSA and
+        ECC keys and must be generated by ML-KEM.KeyGen.
+    prohibitedActions: [REUSE_EXISTING_KEY_MATERIAL]
+    quote: "A KEM involves three different types of keys: encapsulation keys, decapsulation keys, and shared secret keys."
+    source: {document: NIST.FIPS.203.pdf, section: "3.2", page: 24}
+    supersedes: []
+    notes: >-
+      INFERRED, non-gating. FIPS 203 §8 Table 3 fixes ML-KEM-768 key sizes at 1184 and 2400
+      bytes, which no RSA key satisfies, and §3.3 requires keys to come from KeyGen using an
+      approved RBG — but the corpus states no explicit prohibition on reuse. Practically
+      unreachable as a bug (the sizes would not parse), which is why confidence is high and
+      gating is still false. NOTE: GENERATE_KEY is deliberately NOT prohibited here. ML-KEM
+      keys must come from ML-KEM.KeyGen, so forbidding key generation would forbid the
+      correct migration; only reuse of classical key material is prohibited.

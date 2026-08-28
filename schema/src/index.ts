@@ -22,3 +22,4 @@ export * from './migration';
 export * from './verification';
 export * from './governance';
 export * from './collections';
+export * from './rules';
