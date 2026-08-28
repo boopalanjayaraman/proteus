@@ -64,6 +64,33 @@ const Core = z.object({
   MONGODB_DB: nonEmpty.default('proteus'),
 });
 
+/**
+ * Tech Stack §2 and §3 require "Gemini 3.5 Flash or newer eligible Gemini model".
+ * Enforced here rather than left as a comment, because the model id is the one
+ * setting that silently degrades the product: an older model will answer every
+ * prompt and reason worse, with nothing in the logs to say why.
+ */
+export const MINIMUM_GEMINI_VERSION = 3.5;
+
+export function geminiVersionOf(model: string): number | null {
+  const m = /^gemini-(\d+(?:\.\d+)?)/i.exec(model.trim());
+  return m ? Number(m[1]) : null;
+}
+
+const GeminiModel = nonEmpty.superRefine((model, ctx) => {
+  const v = geminiVersionOf(model);
+  // An unrecognised naming scheme passes — a future id we cannot parse should not
+  // block a deploy — but a version we CAN parse and that is too low is rejected.
+  if (v !== null && v < MINIMUM_GEMINI_VERSION) {
+    ctx.addIssue({
+      code: 'custom',
+      message:
+        `"${model}" is below the required Gemini ${MINIMUM_GEMINI_VERSION} floor ` +
+        `(Tech Stack §3: "Use an eligible Gemini 3.5 or newer model for agent reasoning").`,
+    });
+  }
+});
+
 const Gemini = z
   .object({
     GOOGLE_GENAI_USE_VERTEXAI: z
@@ -71,7 +98,7 @@ const Gemini = z
       .default('false')
       .transform((v) => v === 'true'),
     GEMINI_API_KEY: z.string().trim().optional(),
-    GEMINI_MODEL: nonEmpty.default('gemini-2.5-flash'),
+    GEMINI_MODEL: GeminiModel.default('gemini-3.5-flash'),
     GCP_PROJECT_ID: z.string().trim().optional(),
     GCP_REGION: nonEmpty.default('us-central1'),
   })
@@ -104,8 +131,14 @@ const Gcp = z.object({
   GOOGLE_APPLICATION_CREDENTIALS: z.string().trim().optional(),
 });
 
+/**
+ * No global token. UX v1.2 made repository access per-project: the PAT is entered on
+ * the create-project screen and lives in Secret Manager as
+ * proteus-{projectId}-github-pat. A deployment-wide token would defeat that — one leak
+ * would reach every project, and a push could not be attributed to the project that
+ * made it. These two are demo conveniences for prefilling the form.
+ */
 const GitHub = z.object({
-  GITHUB_TOKEN: nonEmpty,
   GITHUB_DEFAULT_OWNER: z.string().trim().optional(),
   GITHUB_DEFAULT_REPO: z.string().trim().optional(),
 });
@@ -144,6 +177,9 @@ function memo<T>(fn: () => T): () => T {
   };
 }
 
+/** Exposed so the model floor is testable without a populated environment. */
+export const geminiEnvSchema = () => Gemini;
+
 export const coreConfig = memo(() =>
   load(Core, 'API and database', 'MongoDB Atlas gives you the replica set SSE needs.'),
 );
@@ -164,13 +200,7 @@ export const gcpConfig = memo(() =>
   ),
 );
 
-export const githubConfig = memo(() =>
-  load(
-    GitHub,
-    'repository access',
-    'A fine-grained PAT with Contents: read/write on the demo repository only.',
-  ),
-);
+export const githubConfig = memo(() => load(GitHub, 'repository defaults'));
 
 export const firebaseConfig = memo(() => load(Firebase, 'authentication'));
 

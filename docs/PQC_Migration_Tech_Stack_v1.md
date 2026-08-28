@@ -421,10 +421,23 @@ Do not store large source documents directly inside MongoDB.
 
 ### Prototype Scope
 
-Support:
+Support one repository per project, authorised by a **per-project GitHub fine-grained
+personal access token** collected on the create-project screen (UX v1.2).
 
-- one public repository; or
-- one pre-authorized repository.
+Required scopes, as shown to the user:
+
+```text
+contents: read & write
+pull_requests: write
+metadata: read
+```
+
+The token is stored in Secret Manager as `proteus-{projectId}-github-pat` and is never
+persisted to MongoDB, never returned to the browser, and never written to a log. See
+§15 and the data model §3.2.
+
+One token per project rather than one for the deployment: a leak or a revocation then
+affects a single migration, and every push is attributable to the project that made it.
 
 ### Required Operations
 
@@ -571,14 +584,29 @@ The event stream is not the system of record.
 Google Secret Manager
 ```
 
-Store:
+Two kinds of secret, with different lifecycles.
 
-- GitHub access token / app secret;
-- MongoDB credentials;
-- third-party API credentials if required;
-- other backend-only secrets.
+**Deployment secrets** — one set for the whole service, created at provisioning time:
 
-Never expose these credentials to the React frontend.
+- MongoDB connection string;
+- Gemini API key (unless using Vertex AI with ADC);
+- third-party API credentials if required.
+
+**Per-project secrets** — created and destroyed with the project they belong to:
+
+- `proteus-{projectId}-github-pat` — the repository access token (UX v1.2).
+
+The per-project secret is written once during project creation and read only by the
+GitHub adapter, at the moment of a call, by secret name. Its version is **pinned rather
+than `latest`**: a migration that begins under one token and finishes under another
+cannot be audited, because the evidence package could not say which credential wrote
+the branch. Rotation creates a new version; runs already in flight keep theirs.
+
+Destroying a project destroys its secret. An orphaned secret is a live credential
+nobody is watching.
+
+Never expose any of these to the React frontend. Values the browser needs are prefixed
+`VITE_` and are inlined into the bundle at build time — see `src/frontend/.env.example`.
 
 ---
 

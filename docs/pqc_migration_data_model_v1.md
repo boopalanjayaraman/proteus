@@ -2,7 +2,7 @@
 
 Derived from:
 - `requirements/Autonomous_PQC_Migration_Engineer_MVP_Product_Spec_v1.2.md`
-- `requirements/ux design/v1.1/` — the UX design canvas, screen by screen
+- `requirements/ux design/v1.2/` — the UX design canvas, screen by screen
 - `docs/PQC_Migration_Architecture_v1.md`
 - `docs/PQC_Migration_Tech_Stack_v1.md`
 
@@ -23,7 +23,11 @@ the spec wins on meaning.
 5. **Truth vs. reasoning is modelled explicitly.** Anything Gemini asserts carries `evidenceClass: INFERRED`; anything a tool established carries `OBSERVED` and a `toolRunId`. Verification only accepts tool-established facts.
 6. **Nothing unbounded lives in a document.** Raw build logs, cloned trees, PDFs, and reports go to GCS; Mongo keeps structured extracts and pointers. Keeps every doc far from the 16 MB cap.
 7. **Everything is scoped by `projectId`** — it is the first field of every index, and the authorization boundary (`project.ownerId === firebaseUid`).
-8. **Derived display values are computed, not stored — except where they tick live.** Stage labels, breadcrumbs and CTA text are functions of state. Counters that a live screen updates several times a second are denormalized, because recomputing them per SSE frame is the one place this rule costs more than it saves.
+8. **A repository credential never enters this database.** The GitHub PAT collected at
+   project creation goes straight to Secret Manager; MongoDB holds a *reference* and a
+   display fingerprint. No document, event, agent action or report may contain the token,
+   and no API response may return it. See §3.2.
+9. **Derived display values are computed, not stored — except where they tick live.** Stage labels, breadcrumbs and CTA text are functions of state. Counters that a live screen updates several times a second are denormalized, because recomputing them per SSE frame is the one place this rule costs more than it saves.
 
 ---
 
@@ -213,6 +217,28 @@ interface Project {
     baseCommitSha?: string;          // resolved at clone; the baseline anchor
     visibility: 'PUBLIC' | 'PREAUTHORIZED';
     webUrlTemplate?: string;         // ".../blob/{sha}/{path}#L{line}"
+
+    /**
+     * Where the access token lives. NOT the token — see design rule 8. The
+     * migration branch is written with this credential, so it is per-project:
+     * one repository, one token, one Secret Manager entry, revocable alone.
+     */
+    credential: {
+      /** Secret Manager resource: projects/{gcp}/secrets/{name}/versions/{v} */
+      secretName: string;          // proteus-{projectId}-github-pat
+      secretVersion: string;       // pinned, not "latest" — see below
+      /** Enough to recognise the token in the UI, never enough to use it.
+       *  Renders as "github_pat_11ABCD•••…". */
+      displayPrefix: string;       // first 12 characters
+      /** Scopes the user was asked for (UX v1.2), recorded as granted-at-entry.
+       *  Not proof: GitHub is the only authority on what a token can actually do. */
+      declaredScopes: string[];    // ["contents: read & write", ...]
+      status: 'STORED' | 'MISSING' | 'INVALID' | 'REVOKED';
+      storedAt: Date;
+      lastVerifiedAt?: Date;
+      /** storedAt + 90 days. Surfaces a reminder; does not expire the project. */
+      rotationDueAt: Date;
+    };
 
     /**
      * Detected at clone, before discovery finishes. Renders as the
@@ -1201,6 +1227,9 @@ db.users.createIndex({ userId: 1 }, { unique: true });
 db.projects.createIndex({ projectId: 1 }, { unique: true });
 db.projects.createIndex({ ownerId: 1, "summary.lastActivityAt": -1 });
 db.projects.createIndex({ ownerId: 1, stage: 1 });
+// Rotation reminders (UX v1.2: 90 days) and revoked-credential sweeps.
+db.projects.createIndex({ "repository.credential.rotationDueAt": 1 });
+db.projects.createIndex({ "repository.credential.status": 1 });
 
 // events — the two hot reads: replay-after-seq, and the milestone feed
 db.events.createIndex({ projectId: 1, seq: 1 }, { unique: true });
@@ -1432,7 +1461,7 @@ Every screen in `requirements/ux design/v1.1/`, and what serves it:
 |---|---|
 | Login | `users` |
 | Projects | `projects` (one query — `summary` is the tile) |
-| Create project | `projects`, `project_files`, `repository.profile` |
+| Create project | `projects`, `project_files`, `repository.profile`, `repository.credential` (token write-only in; `displayPrefix` + `status` out) |
 | Live discovery | `discovery_runs.progress`, `graph_nodes`/`graph_edges` by `sequence`, `events` (MILESTONE + ACTIVITY), `evidence` for the inspector |
 | Assessment | `assessments` + `planItems`, `findings` (+ `agentIntent`, `summaryLine`), `evidence` excerpts, `recommendations` |
 | Live migration | `migration_runs` (stage, `metrics`, `branch.commitCount`), `events` stamped with `stage`, `migration_attempts`, `problem_threads`, `baselines.invariants`, `verification_results.checks` |

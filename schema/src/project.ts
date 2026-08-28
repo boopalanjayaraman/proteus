@@ -63,6 +63,69 @@ export const RepositoryProfile = z.object({
 });
 export type RepositoryProfile = z.infer<typeof RepositoryProfile>;
 
+/**
+ * Where the repository access token lives — NOT the token.
+ *
+ * The PAT collected at project creation (UX v1.2) goes straight to Secret Manager.
+ * This document holds a reference and enough of a fingerprint to recognise it in the
+ * UI. No field here can be used to authenticate, which is the point: a database dump,
+ * a log line and an API response are all harmless.
+ */
+export const RepositoryCredential = z.object({
+  /** proteus-{projectId}-github-pat */
+  secretName: z.string().min(1),
+  /**
+   * Pinned, never "latest". A migration that begins under one token and finishes
+   * under another cannot be audited — the evidence package could not say which
+   * credential wrote the branch. Rotation adds a version; in-flight runs keep theirs.
+   */
+  secretVersion: z.string().min(1),
+  /** First 12 characters, for "github_pat_11ABCD•••". Recognisable, not usable. */
+  displayPrefix: z.string().max(12),
+  /**
+   * What the user was asked to grant (UX v1.2). Recorded, not trusted — only GitHub
+   * can say what a token actually permits.
+   */
+  declaredScopes: z.array(z.string()).default([]),
+  status: z.enum(['STORED', 'MISSING', 'INVALID', 'REVOKED']).default('STORED'),
+  storedAt: Timestamp,
+  lastVerifiedAt: Timestamp.optional(),
+  /** storedAt + 90 days. Surfaces a reminder; does not expire the project. */
+  rotationDueAt: Timestamp,
+});
+export type RepositoryCredential = z.infer<typeof RepositoryCredential>;
+
+/** The scopes the create-project screen asks for (UX v1.2). */
+export const REQUIRED_GITHUB_SCOPES = [
+  'contents: read & write',
+  'pull_requests: write',
+  'metadata: read',
+] as const;
+
+export const CREDENTIAL_ROTATION_DAYS = 90;
+
+/** Matches a GitHub token in any of its formats. Used to redact before writing. */
+export const GITHUB_TOKEN_PATTERN =
+  /\b(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})\b/g;
+
+/**
+ * Redacts anything token-shaped. Applied to every event message, agent action
+ * payload and report body before persistence — design rule 8 is enforced at the
+ * write boundary, not left to authors of log statements.
+ */
+export function redactTokens<T>(value: T): T {
+  if (typeof value === 'string') {
+    return value.replace(GITHUB_TOKEN_PATTERN, '[REDACTED]') as unknown as T;
+  }
+  if (Array.isArray(value)) return value.map(redactTokens) as unknown as T;
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, redactTokens(v)]),
+    ) as T;
+  }
+  return value;
+}
+
 export const ProjectRepository = z.object({
   url: z.string().url(),
   provider: z.literal('GITHUB'),
@@ -72,6 +135,7 @@ export const ProjectRepository = z.object({
   visibility: z.enum(['PUBLIC', 'PREAUTHORIZED']),
   /** ".../blob/{sha}/{path}#L{line}" — how evidence becomes a clickable link. */
   webUrlTemplate: z.string().optional(),
+  credential: RepositoryCredential.optional(),
   profile: RepositoryProfile.optional(),
 });
 export type ProjectRepository = z.infer<typeof ProjectRepository>;
@@ -159,10 +223,22 @@ export const Project = z.object({
 });
 export type Project = z.infer<typeof Project>;
 
+/**
+ * The only place a token appears in this model, and it is write-only: accepted once
+ * in the request body, forwarded to Secret Manager, and dropped. It is never assigned
+ * to a Project, never returned by any endpoint, and never logged.
+ */
 export const CreateProjectInput = z.object({
   name: z.string().min(1).max(200),
   repositoryUrl: z.string().url(),
   defaultBranch: z.string().optional(),
+  /** GitHub fine-grained PAT. See REQUIRED_GITHUB_SCOPES. */
+  githubToken: z
+    .string()
+    .min(20)
+    .refine((t) => /^(gh[pousr]_|github_pat_)/.test(t), {
+      message: 'expected a GitHub token (ghp_… or github_pat_…)',
+    }),
   instructions: z.string().max(20_000).optional(),
 });
 export type CreateProjectInput = z.infer<typeof CreateProjectInput>;

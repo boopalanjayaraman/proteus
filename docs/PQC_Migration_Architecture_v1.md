@@ -256,18 +256,28 @@ User
 Create Project
   ↓
 Repository URL
-Hardware / OT / HSM documents
-Existing findings
-AI instructions
+GitHub fine-grained PAT          ← UX v1.2
+Hardware / OT / HSM documents    (optional)
+Existing findings                (optional)
+AI instructions                  (optional)
   ↓
 Backend
   ↓
-Persist project in MongoDB
+Persist project in MongoDB       ← token is NOT among the persisted fields
+  ↓
+Write PAT to Secret Manager      proteus-{projectId}-github-pat
+  ↓
+Persist secret REFERENCE on the project
+  (secretName, pinned secretVersion, displayPrefix, declaredScopes, rotationDueAt)
   ↓
 Upload documents to Cloud Storage
   ↓
 Start discovery workflow
 ```
+
+The token is accepted once, forwarded, and dropped. It is never assigned to a Project
+field, never returned by an endpoint, and never written to an event or an agent action.
+The GitHub adapter fetches it by secret name at the moment of each call.
 
 The repository remains read-only during this phase.
 
@@ -1026,6 +1036,8 @@ Git branch creation: NO
 Source modifications: NO
 
 Deployment: NO
+
+Credentials: SERVER-SIDE ONLY — never returned to the browser
 ```
 
 ### Approved migration phase
@@ -1114,6 +1126,18 @@ Branch
 Commits
 Diff
 Optional PR
+```
+
+Authenticated per project with the PAT held in Secret Manager. The adapter is the only
+component that reads it, and it holds it for the duration of a call — never on a
+document, never on the run.
+
+### Secret Manager
+
+```text
+Deployment secrets   MongoDB URI, Gemini key
+Per-project secrets  proteus-{projectId}-github-pat  (created with the project,
+                     destroyed with it, version pinned per migration run)
 ```
 
 ### Cloud Build
