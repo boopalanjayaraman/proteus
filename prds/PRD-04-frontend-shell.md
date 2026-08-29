@@ -3,12 +3,12 @@
 | | |
 |---|---|
 | **Increment** | 04 |
-| **Status** | `PLANNED` |
+| **Status** | `DELIVERED` |
 | **Depends on** | PRD-03 |
 | **Unblocks** | PRD-05, PRD-07, PRD-08, PRD-09 |
 | **Demoable outcome** | Sign in with Google and land on an empty projects screen, in either theme, with the persistent header rendering. |
 | **Created** | 2026-08-29 |
-| **Delivered** | |
+| **Delivered** | 2026-08-29 |
 
 ---
 
@@ -100,16 +100,45 @@ see for eight increments.
 
 ## 9. Definition of done
 
-- [ ] All FRs implemented
-- [ ] All ACs verified
-- [ ] Typecheck, lint and tests pass
-- [ ] §10 records what was actually built
+- [x] All FRs implemented
+- [x] All ACs verified — 12 tests
+- [x] Typecheck and tests pass (97 total across both workspaces)
+- [ ] Lint — no linter yet (TD-005)
+- [x] §10 records what was actually built
 
 ## 10. Delivery log
 
 | Date | Change | Why |
 |---|---|---|
+| 2026-08-29 | `styles/tokens.css` | Palette taken verbatim from the UX canvas, both themes |
+| 2026-08-29 | `lib/impact.ts` | Stage, impact and disposition mappings; derived header values |
+| 2026-08-29 | `api/{client,stream}.ts` | Typed client and the resumable stream reader |
+| 2026-08-29 | `lib/firebase.ts`, `app/{AuthContext,ThemeContext}.tsx` | Google sign-in, profile, server-persisted theme |
+| 2026-08-29 | `components/layout/{Header,Nav}.tsx`, `screens/{Login,Placeholder}.tsx`, `app/App.tsx` | The shell and six routes |
+| 2026-08-29 | `test/shell.test.ts` | 12 acceptance tests |
 
-**Deviations from plan** —
+**Deviations from plan**
 
-**Deferred** —
+- **`EventSource` is not used.** It cannot send an `Authorization` header, and the stream
+  is ownership-checked. The client reads the response body directly and reconnects with
+  exponential backoff, which also means the resume cursor is ours rather than the
+  browser's.
+- **The client filters by `seq` as well as the server.** A duplicate would have to get
+  past both. Deliberate belt-and-braces: a repeated row in the live feed is the most
+  visible possible bug and the cheapest to prevent twice.
+- **Theme writes are optimistic.** The toggle applies immediately and the server write
+  follows; a failure leaves the localStorage hint correct for this device and reconciles
+  at next sign-in. Waiting for the round trip would make the control feel broken.
+- **Placeholder screens name the PRD that delivers them.** During a build, "not built
+  yet" and "built but broken" look identical from the outside, which costs more time than
+  the label saves.
+- **Root `tsconfig.json` no longer covers the frontend.** It needs `jsx` and
+  `vite/client` types that the backend must not have, so each workspace typechecks itself
+  and the root script fans out.
+
+**Deferred**
+
+- Screen content → PRD-05 onward. Six routes exist and render placeholders.
+- Graph rendering → PRD-08.
+- CORS and rate limiting — not needed until the frontend calls a deployed origin.
+- Lint — TD-005, due before PRD-07.

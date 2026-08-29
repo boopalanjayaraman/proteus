@@ -1,0 +1,92 @@
+/* Application shell. Layout only — colour comes from tokens.css. */
+
+.booting { display: grid; place-items: center; height: 100%; }
+
+/* ── login ─────────────────────────────────────────────────────────────── */
+.login { display: grid; place-items: center; height: 100%; padding: 32px; }
+.login-card {
+  width: 100%; max-width: 480px; background: var(--sur);
+  border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 34px 36px;
+}
+.login-card h1 { font-size: 20px; line-height: 1.35; margin: 22px 0 8px; letter-spacing: -0.01em; }
+.login-card .sub { color: var(--fg2); margin: 0 0 24px; }
+.login-card .fine { color: var(--fg3); font-size: 12px; margin: 18px 0 0; }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 20px; }
+.chip {
+  font-size: 10px; letter-spacing: 0.08em; color: var(--fg3);
+  border: 1px solid var(--line2); border-radius: 999px; padding: 4px 10px;
+}
+
+.brand { font-weight: 700; letter-spacing: 0.14em; font-size: 13px; }
+
+/* ── shell ─────────────────────────────────────────────────────────────── */
+.shell { display: flex; flex-direction: column; height: 100%; }
+.body { display: flex; flex: 1; min-height: 0; }
+
+.hdr {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; padding: 0 18px; height: 52px;
+  border-bottom: 1px solid var(--line); background: var(--sur);
+}
+.hdr-left, .hdr-right { display: flex; align-items: center; gap: 16px; }
+.crumb { color: var(--fg3); }
+
+.pill {
+  font-size: 10.5px; letter-spacing: 0.09em; padding: 4px 10px; border-radius: 999px;
+}
+
+.stat { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.2; }
+.stat b { font-size: 13px; }
+
+.ghost {
+  background: transparent; border: 1px solid var(--line2); color: var(--fg2);
+  border-radius: 8px; padding: 5px 10px; font: 10.5px/1 var(--sans);
+  letter-spacing: 0.09em; cursor: pointer;
+}
+.ghost:hover { color: var(--fg); border-color: var(--fg4); }
+
+.primary {
+  width: 100%; background: var(--acc); color: var(--accfg); border: 0;
+  border-radius: var(--radius); padding: 11px 18px; font: 600 14px var(--sans); cursor: pointer;
+}
+
+.account { position: relative; }
+.avatar {
+  display: grid; place-items: center; width: 30px; height: 30px; border-radius: 999px;
+  background: var(--rai); border: 1px solid var(--line2); font-size: 11px; cursor: default;
+}
+.account-menu {
+  position: absolute; right: 0; top: 38px; display: none; min-width: 190px;
+  background: var(--sur); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 12px 14px; z-index: 20;
+}
+.account:hover .account-menu { display: block; }
+.account-name { font-size: 13px; margin-bottom: 2px; }
+.account-menu .ghost { margin-top: 12px; width: 100%; }
+
+/* ── nav ───────────────────────────────────────────────────────────────── */
+.nav {
+  width: 216px; flex: 0 0 216px; padding: 14px 10px;
+  border-right: 1px solid var(--line); background: var(--sur);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.nav-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 11px; border-radius: 8px; color: var(--fg2);
+  text-decoration: none; font-size: 13px;
+}
+.nav-item:hover { color: var(--fg); background: var(--rai); }
+.nav-item.active { color: var(--fg); background: var(--rai); }
+.nav-item.disabled { color: var(--fg4); cursor: default; }
+.nav-badge { font-size: 9.5px; letter-spacing: 0.1em; }
+.nav-foot { margin-top: auto; padding: 10px 11px; color: var(--fg4); }
+
+/* ── main ──────────────────────────────────────────────────────────────── */
+.main { flex: 1; min-width: 0; overflow: auto; padding: 26px 28px; }
+
+.placeholder {
+  border: 1px dashed var(--line2); border-radius: var(--radius-lg);
+  padding: 40px; text-align: center; color: var(--fg2);
+}
+.placeholder h2 { color: var(--fg); font-size: 17px; margin: 0 0 6px; }
+.placeholder .sub { margin: 0 0 16px; }

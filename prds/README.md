@@ -47,7 +47,8 @@ migration loop cannot be built before the plan it executes exists.
 | 01 | `DELIVERED` — written retroactively; the code exists and is tested |
 | 02 | `DELIVERED` — 2026-08-29, 17 acceptance tests on a real replica set |
 | 03 | `DELIVERED` — 2026-08-29, 19 acceptance tests on a real server |
-| 04–14 | `PLANNED` |
+| 04 | `DELIVERED` — 2026-08-29, 12 acceptance tests; shell renders and builds |
+| 05–14 | `PLANNED` |
 
 ## Conventions
 

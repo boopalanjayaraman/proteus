@@ -10,7 +10,11 @@
     "src/frontend"
   ],
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "dev": "npm run dev -w @proteus/frontend",
+    "dev:api": "npm run dev -w @proteus/backend"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

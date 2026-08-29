@@ -1,0 +1,79 @@
+/*
+ * Design tokens, taken verbatim from the UX design canvas v1.2.
+ *
+ * Dark is the default and light is the override, matching the canvas — which
+ * matters because every colour decision in the graph and the impact legend was
+ * made against the dark ground first.
+ */
+:root {
+  --bg: #08090c;
+  --sur: #0f1115;
+  --sur2: #0b0d10;
+  --rai: #13161b;
+  --line: rgba(255, 255, 255, 0.09);
+  --line2: rgba(255, 255, 255, 0.14);
+  --fg: #e7eaef;
+  --fg2: #8d95a3;
+  --fg3: #7c8593;
+  --fg4: #4a515d;
+  --acc: #58d1cd;
+  --accfg: #08090c;
+  --ok: #79cf94;
+  --warn: #e6c07b;
+  --bad: #e88b7d;
+  --vio: #a798e6;
+  --graph: #0a0c0f;
+  --inv: #e7eaef;
+  --invfg: #13161b;
+  --dash: rgba(255, 255, 255, 0.22);
+
+  --radius: 10px;
+  --radius-lg: 14px;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+[data-theme='light'] {
+  --bg: #f4f5f7;
+  --sur: #ffffff;
+  --sur2: #ffffff;
+  --rai: #eef0f4;
+  --line: rgba(17, 24, 33, 0.10);
+  --line2: rgba(17, 24, 33, 0.16);
+  --fg: #151a21;
+  --fg2: #5a6371;
+  --fg3: #7c8593;
+  --fg4: #9aa2ae;
+  --acc: #0d827e;
+  --accfg: #ffffff;
+  --ok: #1c7a45;
+  --warn: #8a6410;
+  --bad: #b53f2e;
+  --vio: #5b46b8;
+  --graph: #fafbfc;
+  --inv: #151a21;
+  --invfg: #ffffff;
+  --dash: rgba(17, 24, 33, 0.22);
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.55 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Uppercase micro-labels are used throughout the canvas. */
+.label {
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--fg2);
+}
+
+.mono { font-family: var(--mono); }
