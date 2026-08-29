@@ -792,7 +792,14 @@ interface Baseline {
     description: string;             // "Malformed peer key → 400"
     assertion: string;               // executable predicate / test id
     capturedFrom: 'EXISTING_TEST' | 'GENERATED_PROBE' | 'RUNTIME_OBSERVATION';
-    mustHold: true;
+    /**
+     * The baseline observes two different kinds of thing. `POST /settlements`
+     * returning 201 must survive the migration; the wrapped key being 256 bytes
+     * must not — ML-KEM-768 produces 1088, and that change IS the migration.
+     * Verification asserts the first set and reports the second before-and-after.
+     */
+    disposition: 'MUST_PRESERVE' | 'EXPECTED_TO_CHANGE';
+    observedAfter?: string;
     evidenceIds: string[];
   }>;
 

@@ -1,6 +1,22 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
+target/
+*.class
+
+# Local configuration — never commit real credentials
 .env
 .env.local
-*.log
+
+# Editors
+.idea/
+.vscode/
+*.iml
+
+# OS
 .DS_Store
+
+# Logs
+*.log

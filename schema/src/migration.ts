@@ -109,7 +109,25 @@ export const BehavioralInvariant = z.object({
   /** Executable predicate or test id — re-run verbatim during verification. */
   assertion: z.string(),
   capturedFrom: z.enum(['EXISTING_TEST', 'GENERATED_PROBE', 'RUNTIME_OBSERVATION']),
-  mustHold: z.literal(true),
+
+  /**
+   * Whether the migration must preserve this, or is expected to change it.
+   *
+   * The baseline observes two different kinds of thing and they cannot share a
+   * verdict. `POST /settlements` returning 201 must survive; the wrapped key
+   * being 256 bytes must NOT — RSA-2048 wraps to 256, ML-KEM-768 produces 1088,
+   * and that difference is the migration working.
+   *
+   * Verification ASSERTS the MUST_PRESERVE set and REPORTS the
+   * EXPECTED_TO_CHANGE set before-and-after. Asserting both would fail a correct
+   * migration; recording only the first would hide a material change from the
+   * report. See EXEC-INV-003 and EXEC-VER-005.
+   */
+  disposition: z.enum(['MUST_PRESERVE', 'EXPECTED_TO_CHANGE']),
+
+  /** Set on an EXPECTED_TO_CHANGE invariant once verification has re-run it. */
+  observedAfter: z.string().optional(),
+
   evidenceIds: z.array(Id).default([]),
 });
 export type BehavioralInvariant = z.infer<typeof BehavioralInvariant>;

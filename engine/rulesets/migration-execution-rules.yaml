@@ -148,9 +148,9 @@ rules:
       most dangerous to lose: a migration that turns a rejection into an acceptance passes
       every happy-path test.
     schemaNote: >-
-      BehavioralInvariant in schema/src/migration.ts declares `mustHold: z.literal(true)`,
-      which cannot represent an EXPECTED_TO_CHANGE observation. That field needs to become
-      `disposition: MUST_PRESERVE | EXPECTED_TO_CHANGE` before this rule can be implemented.
+      Implemented. BehavioralInvariant.disposition carries MUST_PRESERVE or
+      EXPECTED_TO_CHANGE; `mustHold: z.literal(true)` was removed because it could not
+      represent an observation the migration is supposed to change (decision D-003).
 
   - ruleId: EXEC-INV-004
     family: INVARIANT_CAPTURE

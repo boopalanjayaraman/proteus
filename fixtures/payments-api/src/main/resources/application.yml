@@ -1,0 +1,47 @@
+spring:
+  application:
+    name: payments-api
+  mvc:
+    problemdetails:
+      enabled: true
+
+server:
+  port: ${PORT:8080}
+  error:
+    include-message: always
+
+# ---------------------------------------------------------------------------
+# Transport security
+#
+# Terminated at the platform load balancer. The application does not negotiate
+# transport cryptography itself; the protocol set below is what the platform is
+# configured to offer.
+# ---------------------------------------------------------------------------
+transport:
+  ssl:
+    enabled-protocols: TLSv1.3
+    ciphers: TLS_AES_256_GCM_SHA384,TLS_CHACHA20_POLY1305_SHA256
+
+# ---------------------------------------------------------------------------
+# Acquirer boundary
+# ---------------------------------------------------------------------------
+acquirer:
+  name: Northbank Acquiring
+  endpoint: https://sandbox.acquirer.example/settlements
+  handshake:
+    key-type: RSA_PUBLIC_KEY
+
+# ---------------------------------------------------------------------------
+# Ledger storage
+#
+# Data at rest is encrypted with AES-256-GCM by the storage layer. Symmetric
+# cryptography at this strength is not affected by the key-establishment
+# question above.
+# ---------------------------------------------------------------------------
+ledger:
+  datastore: ledger-db
+  at-rest-encryption: AES-256-GCM
+
+logging:
+  level:
+    pay: INFO

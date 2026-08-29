@@ -1,0 +1,18 @@
+# Maven build output
+target/
+*.class
+
+# Editors
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+
+# Local overrides — never commit real credentials or certificates
+.env
+src/main/resources/application-local.yml
+deploy/tls/*.pem
+deploy/tls/*.key
+deploy/tls/*.crt
