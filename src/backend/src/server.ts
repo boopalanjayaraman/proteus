@@ -184,11 +184,20 @@ async function main(): Promise<void> {
       : 'platform admins configured',
   );
 
+  // Without at least one allowed origin no browser can reach this API, so an
+  // empty list is a misconfiguration rather than a hardening choice.
+  const allowedOrigins = core.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
+  if (allowedOrigins.length === 0) {
+    log.error('ALLOWED_ORIGINS is empty — no browser origin can call this API.');
+  } else {
+    log.info({ allowedOrigins }, 'CORS origins allowed');
+  }
+
   const github = new GitHubReader();
 
   const app = await buildServer({
     repos, projects, graph, assessments, approvals, blobs, verifier, logger: log,
-    activity,
+    activity, allowedOrigins,
     // Deliberately not awaited, for the same reason discovery is not: the
     // migration outlives the request that approved it.
     startMigration: (projectId, migrationRunId) => {

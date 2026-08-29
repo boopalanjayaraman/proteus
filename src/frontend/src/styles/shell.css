@@ -3,28 +3,124 @@
 .booting { display: grid; place-items: center; height: 100%; }
 
 /* ── login ─────────────────────────────────────────────────────────────── */
-.login { display: grid; place-items: center; height: 100%; padding: 32px; }
-.login-card {
-  width: 100%; max-width: 480px; background: var(--sur);
-  border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 34px 36px;
+/* ── home screen (UX v1.3) ──────────────────────────────────────────────── */
+/*
+ * Two panes that wrap rather than shrink. The left one is a fixed band of
+ * readable width; the right is the graph and takes what is left. Below roughly
+ * 800px they stack, because a 400px graph pane beside a 400px column is two
+ * things nobody can read instead of one.
+ */
+.login {
+  display: flex; flex-wrap: wrap; align-content: stretch;
+  height: 100%; min-width: 0; overflow: auto;
 }
-.login-card h1 { font-size: 20px; line-height: 1.35; margin: 22px 0 8px; letter-spacing: -0.01em; }
-.login-card .sub { color: var(--fg2); margin: 0 0 24px; }
-.login-card .fine { color: var(--fg3); font-size: 12px; margin: 18px 0 0; }
+
+.login-pane {
+  flex: 1 1 380px; min-width: 340px; max-width: 452px;
+  padding: 40px; gap: 28px;
+  display: flex; flex-direction: column; justify-content: space-between;
+  border-right: 1px solid var(--line); background: var(--sur2);
+}
+
+.login-head { display: flex; align-items: center; gap: 20px; }
+.login-mark {
+  width: 20px; height: 20px; flex: none;
+  border: 1.5px solid var(--acc); transform: rotate(45deg);
+}
+.login-wordmark { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.login-brand { font: 600 15px/1 var(--sans); letter-spacing: 0.2em; }
+.login-tagline { font-size: 9px; line-height: 1; letter-spacing: 0.14em; color: var(--fg3); }
+.login-theme { flex: none; }
+
+.login-middle { flex: none; display: flex; flex-direction: column; gap: 24px; }
+.login-middle h1 {
+  margin: 0; font-weight: 300; font-size: 26px; line-height: 1.24;
+  letter-spacing: -0.018em; text-wrap: pretty;
+}
 .login-nowrap { white-space: nowrap; }
+.login-cta { display: flex; flex-direction: column; gap: 18px; }
+
+/* Inverted rather than accent-filled: it is the only action on the screen. */
+.login-google {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  height: 52px; width: 100%; cursor: pointer;
+  background: var(--inv); color: var(--invfg); border: 1px solid var(--inv);
+  border-radius: 6px; font: 500 14.5px var(--sans);
+}
+.login-google:hover { opacity: 0.88; }
+.login-g {
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--invfg); color: var(--inv); font: 600 12.5px var(--sans);
+}
+.login-sub {
+  margin: 0; font-weight: 300; font-size: 15px; line-height: 1.65;
+  color: var(--fg2); text-wrap: pretty;
+}
+
+.login-foot { flex: none; display: flex; flex-direction: column; gap: 16px; }
+.login-fine {
+  margin: 0; font-weight: 300; font-size: 12.5px; line-height: 1.7;
+  color: var(--fg3); text-wrap: pretty;
+}
 
 /* MIGRATES / RECOMMENDS — the two halves of what the product produces. */
-.login-split {
-  display: flex; flex-wrap: wrap; gap: 8px 30px; margin-top: 16px;
-  padding-top: 16px; border-top: 1px solid var(--line);
-}
+.login-split { display: flex; flex-wrap: wrap; gap: 10px 30px; }
 .login-split-col { display: flex; flex-direction: column; gap: 4px; }
-.login-split-label { font-size: 9px; letter-spacing: 0.12em; font-weight: 500; }
-.login-split-value { font-size: 12px; line-height: 1.6; color: var(--fg3); }
+.login-split-label { font-size: 9px; font-weight: 500; letter-spacing: 0.12em; }
+.login-split-value {
+  font-weight: 300; font-size: 12px; line-height: 1.6; color: var(--fg3);
+}
+
+.login-rule { height: 1px; background: var(--line); }
+.login-chips {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+  font-size: 9.5px; line-height: 1.5; letter-spacing: 0.08em; color: var(--fg4);
+}
+.login-chips > span { white-space: nowrap; }
+.login-dot { color: var(--line2); }
+
+/* Shared chip styling — the create-project scope list and the placeholders. */
 .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 20px; }
 .chip {
   font-size: 10px; letter-spacing: 0.08em; color: var(--fg3);
   border: 1px solid var(--line2); border-radius: 999px; padding: 4px 10px;
+}
+
+/* ── the decorative graph ───────────────────────────────────────────────── */
+.login-graph {
+  flex: 1 1 460px; min-width: 380px; min-height: 420px;
+  position: relative; overflow: hidden; background: var(--graph);
+}
+.login-graph-edges {
+  position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0.85;
+}
+.login-node {
+  position: absolute; transform: translate(-50%, -50%);
+  display: flex; align-items: center; gap: 7px; white-space: nowrap;
+  padding: 6px 10px; border: 1px solid var(--line2); border-radius: 4px;
+  background: var(--sur);
+}
+.login-node-dot { width: 6px; height: 6px; border-radius: 2px; flex: none; }
+.login-node-name { font-size: 10px; color: var(--fg2); }
+
+.login-graph-caption {
+  position: absolute; left: 50px; right: 50px; bottom: 48px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.login-graph-label {
+  font-size: 9.5px; font-weight: 500; letter-spacing: 0.16em; color: var(--acc);
+}
+.login-graph-note {
+  font-weight: 300; font-size: 13px; line-height: 1.65;
+  color: var(--fg2); max-width: 420px; text-wrap: pretty;
+}
+
+@media (max-width: 820px) {
+  .login-pane { max-width: none; border-right: 0; border-bottom: 1px solid var(--line); }
+  /* Node chips are placed for a wide pane and collide once it narrows. */
+  .login-graph { min-height: 340px; }
+  .login-graph-caption { left: 24px; right: 24px; bottom: 24px; }
 }
 
 .brand { font-weight: 700; letter-spacing: 0.14em; font-size: 13px; }

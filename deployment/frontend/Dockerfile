@@ -21,6 +21,9 @@ ARG VITE_API_BASE_URL
 ARG VITE_FIREBASE_API_KEY
 ARG VITE_FIREBASE_AUTH_DOMAIN
 ARG VITE_FIREBASE_PROJECT_ID
+# Declared because `firebase.ts` reads it. Missing, it lands as `undefined` in
+# the bundle rather than failing the build.
+ARG VITE_FIREBASE_APP_ID
 RUN npm run build -w @proteus/frontend
 
 FROM nginx:1.27-alpine AS runtime

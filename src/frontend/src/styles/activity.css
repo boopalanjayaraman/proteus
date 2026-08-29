@@ -27,6 +27,8 @@
   font-weight: 600;
 }
 
+.activity-head .sub { margin: 0; color: var(--fg2); font-size: 13px; }
+
 .activity-role {
   font-size: 10px;
   letter-spacing: 0.08em;

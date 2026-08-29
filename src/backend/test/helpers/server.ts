@@ -39,7 +39,11 @@ export interface TestServer {
   stop: () => Promise<void>;
 }
 
-export async function startTestServer(repos: Repositories): Promise<TestServer> {
+export async function startTestServer(
+  repos: Repositories,
+  /** CORS is off by default: an in-process fetch has no origin to check. */
+  opts: { allowedOrigins?: string[] } = {},
+): Promise<TestServer> {
   const vault = new InMemorySecretVault();
   const blobs = new InMemoryBlobStore();
   const projects = new ProjectService(repos, vault, blobs);
@@ -56,6 +60,7 @@ export async function startTestServer(repos: Repositories): Promise<TestServer> 
     blobs,
     verifier: new StubVerifier(),
     logger: pino({ level: 'silent' }),
+    ...(opts.allowedOrigins ? { allowedOrigins: opts.allowedOrigins } : {}),
   });
   await app.listen({ port: 0, host: '127.0.0.1' });
   const addr = app.server.address();

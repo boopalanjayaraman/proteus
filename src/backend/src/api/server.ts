@@ -1,4 +1,5 @@
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
+import cors from '@fastify/cors';
 import type { Logger } from '../config/logger';
 import type { Project, SandboxDeployment } from '@proteus/schema';
 import type { Repositories } from '../core/repositories';
@@ -51,6 +52,12 @@ export interface ServerOptions {
   }>;
   /** User activity. PRD-15 supplies it; constructed here when absent. */
   activity?: ActivityRecorder;
+  /**
+   * Browser origins allowed to call this API. Empty disables CORS entirely,
+   * which is what the tests want — they call the server directly, and a
+   * same-process fetch has no origin to check.
+   */
+  allowedOrigins?: string[];
 }
 
 /**
@@ -71,6 +78,29 @@ export async function buildServer(opts: ServerOptions): Promise<FastifyInstance>
     connectionTimeout: 0,
     requestTimeout: 0,
   });
+
+  /**
+   * CORS, because the frontend is never the same origin as this API.
+   *
+   * Vite serves the app on :5173 in development and Cloud Run or Firebase
+   * Hosting serves it from its own domain in production — so every deployment
+   * shape this product has is cross-origin, and without this the browser
+   * refuses every call before it leaves the page.
+   *
+   * An allowlist rather than `*`. Requests carry a Firebase ID token in an
+   * Authorization header, and `credentials` plus a wildcard is exactly the
+   * combination that lets an unrelated page read a signed-in user's data.
+   */
+  if (opts.allowedOrigins?.length) {
+    await app.register(cors, {
+      origin: opts.allowedOrigins,
+      methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+      // The screen header PRD-15 added is a custom header, so a preflight will
+      // ask about it by name and fail if it is not listed.
+      allowedHeaders: ['authorization', 'content-type', 'x-proteus-screen'],
+      maxAge: 3600,
+    });
+  }
 
   installErrorHandler(app);
 

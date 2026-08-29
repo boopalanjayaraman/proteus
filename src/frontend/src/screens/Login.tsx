@@ -1,65 +1,135 @@
 import { useAuth } from '../app/AuthContext';
+import { useTheme } from '../app/ThemeContext';
+import { LOGIN_VIEWBOX, loginEdges, loginNodes } from '../lib/loginGraph';
 
 /**
  * The home screen (UX v1.3).
  *
- * The copy changed in v1.3 to say what the product does *before* asking anyone
- * to sign in. The claim it now leads with — that cryptography reaches past
- * source code into hardware and vendor firmware — is the reason the product
- * splits its output in two, so MIGRATES and RECOMMENDS are named here rather
- * than discovered on the assessment screen.
+ * Two panes: what the product is on the left, what it produces on the right.
+ * The graph is decorative and fixed — nobody is signed in, so there is no
+ * project to draw, and inventing a live one would put a fabricated finding on
+ * the first screen a visitor sees. It is the payments fixture, which is the
+ * same graph discovery builds for real once a project exists.
+ *
+ * The copy changed in v1.3 to say what the product does before asking anyone to
+ * sign in. The claim it leads with — that cryptography reaches past source code
+ * into hardware and vendor firmware — is why the product splits its output in
+ * two, so MIGRATES and RECOMMENDS are named here rather than discovered later.
  */
 export function Login() {
   const { signIn } = useAuth();
+  const { theme, toggle } = useTheme();
+
   return (
     <div className="login">
-      <div className="login-card">
-        <div className="brand mono">PROTEUS</div>
-        <div className="label" style={{ marginTop: 4 }}>PQC MIGRATION ENGINEER</div>
-        <h1>
-          An autonomous engineer for{' '}
-          {/* Kept on one line: the phrase is the product's whole subject. */}
-          <span className="login-nowrap">post-quantum migration.</span>
-        </h1>
-        <p className="sub">
-          Give it the context. Watch it understand. Approve once. Watch it work.
-          Review the evidence.
-        </p>
-        <button className="primary" onClick={() => void signIn()}>
-          Continue with Google
-        </button>
-
-        <p className="fine">
-          Where cryptography reaches past source code — HSMs, industrial gateways,
-          vendor firmware.
-        </p>
-
-        {/* The split the whole product rests on: what the agent changes itself,
-            and what it can only hand to a person. Said before sign-in so nobody
-            arrives expecting an HSM to be migrated. */}
-        <div className="login-split">
-          <div className="login-split-col">
-            <div className="mono login-split-label" style={{ color: 'var(--acc)' }}>
-              MIGRATES
-            </div>
-            <div className="login-split-value">Code, dependencies, tests</div>
+      <section className="login-pane">
+        <header className="login-head">
+          <div className="login-mark" aria-hidden="true" />
+          <div className="login-wordmark">
+            <div className="login-brand">PROTEUS</div>
+            <div className="mono login-tagline">PQC MIGRATION ENGINEER</div>
           </div>
-          <div className="login-split-col">
-            <div className="mono login-split-label" style={{ color: 'var(--vio)' }}>
-              RECOMMENDS
-            </div>
-            <div className="login-split-value">Hardware, firmware, vendors</div>
+          {/* The only theme control before sign-in — the header that normally
+              carries one belongs to the shell, which does not exist yet. */}
+          <button className="ghost login-theme" onClick={toggle} title="Switch theme">
+            {theme === 'dark' ? 'LIGHT' : 'DARK'}
+          </button>
+        </header>
+
+        <div className="login-middle">
+          <h1>
+            An autonomous engineer for{' '}
+            {/* Kept on one line: the phrase is the product's whole subject. */}
+            <span className="login-nowrap">post-quantum migration.</span>
+          </h1>
+          <div className="login-cta">
+            <button className="login-google" onClick={() => void signIn()}>
+              <span className="login-g" aria-hidden="true">G</span>
+              Continue with Google
+            </button>
+            <p className="login-sub">
+              Give it the context. Watch it understand. Approve once. Watch it work.
+              Review the evidence.
+            </p>
           </div>
         </div>
 
-        <div className="chips">
-          {/* "v1.2 PROTOTYPE" is gone; the scoping promise it used to make in a
-              sentence is now a chip, which is what PRD-15 actually enforces. */}
-          <span className="chip mono">SCOPED TO YOUR ACCOUNT</span>
-          <span className="chip mono">ISOLATED SANDBOX</span>
-          <span className="chip mono">NO PRODUCTION ACCESS</span>
+        <footer className="login-foot">
+          <p className="login-fine">
+            Where cryptography reaches past source code — HSMs, industrial gateways,
+            vendor firmware.
+          </p>
+
+          {/* The split the whole product rests on: what the agent changes itself,
+              and what it can only hand to a person. Said before sign-in so nobody
+              arrives expecting an HSM to be migrated. */}
+          <div className="login-split">
+            <div className="login-split-col">
+              <div className="mono login-split-label" style={{ color: 'var(--acc)' }}>
+                MIGRATES
+              </div>
+              <div className="login-split-value">Code, dependencies, tests</div>
+            </div>
+            <div className="login-split-col">
+              <div className="mono login-split-label" style={{ color: 'var(--vio)' }}>
+                RECOMMENDS
+              </div>
+              <div className="login-split-value">Hardware, firmware, vendors</div>
+            </div>
+          </div>
+
+          <div className="login-rule" />
+
+          {/* "v1.2 PROTOTYPE" is gone. The scoping promise it used to make in a
+              sentence is now a claim PRD-15 actually enforces. */}
+          <div className="mono login-chips">
+            <span>SCOPED TO YOUR ACCOUNT</span>
+            <span className="login-dot">·</span>
+            <span>ISOLATED SANDBOX</span>
+            <span className="login-dot">·</span>
+            <span>NO PRODUCTION ACCESS</span>
+          </div>
+        </footer>
+      </section>
+
+      <section className="login-graph" aria-hidden="true">
+        {/* Stretched rather than letterboxed, and the chips are positioned in
+            percentages, so lines stay attached to boxes at any pane width. */}
+        <svg
+          className="login-graph-edges"
+          viewBox={`0 0 ${LOGIN_VIEWBOX.width} ${LOGIN_VIEWBOX.height}`}
+          preserveAspectRatio="none"
+        >
+          {loginEdges.map((e, i) => (
+            <line
+              key={i}
+              x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
+              stroke="var(--line2)"
+              strokeWidth={1}
+              strokeDasharray={e.inferred ? '4 4' : undefined}
+              vectorEffect="non-scaling-stroke"
+            />
+          ))}
+        </svg>
+
+        {loginNodes.map((n) => (
+          <div
+            key={n.id}
+            className="login-node"
+            style={{ left: `${n.left}%`, top: `${n.top}%` }}
+          >
+            <span className="login-node-dot" style={{ background: n.colour }} />
+            <span className="mono login-node-name">{n.name}</span>
+          </div>
+        ))}
+
+        <div className="login-graph-caption">
+          <div className="mono login-graph-label">LIVE CRYPTO DEPENDENCY GRAPH</div>
+          <div className="login-graph-note">
+            Observed facts kept separate from inferred relationships.
+          </div>
         </div>
-      </div>
+      </section>
     </div>
   );
 }

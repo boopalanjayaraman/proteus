@@ -70,6 +70,18 @@ const Core = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   MONGODB_URI: nonEmpty,
   MONGODB_DB: nonEmpty.default('proteus'),
+
+  /**
+   * Browser origins allowed to call this API. Comma-separated, exact matches.
+   *
+   * The frontend is a separate origin in every deployment shape this product
+   * has — Vite on :5173 locally, Cloud Run or Firebase Hosting in production —
+   * so without this nothing in a browser can reach the API at all. An allowlist
+   * rather than `*`: requests carry a Firebase ID token, and a wildcard on a
+   * credentialed endpoint is how a token ends up being sent to somebody else's
+   * page.
+   */
+  ALLOWED_ORIGINS: z.string().trim().default('http://localhost:5173'),
 });
 
 /**

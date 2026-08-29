@@ -502,3 +502,33 @@ describe('every project-scoped route is owned, and evidence is fetchable', () =>
     expect(mine.projects.every((x: { ownerId: string }) => x.ownerId === OWNER)).toBe(true);
   });
 });
+
+describe('CORS — the frontend is never the same origin', () => {
+  it('answers a preflight for the allowed origin, naming the headers the app sends', async () => {
+    const s = await startTestServer(t.repos, { allowedOrigins: ['https://proteus.example'] });
+    const res = await fetch(`${s.url}/projects`, {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://proteus.example',
+        'access-control-request-method': 'GET',
+        'access-control-request-headers': 'authorization,x-proteus-screen',
+      },
+    });
+    expect(res.status).toBeLessThan(300);
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://proteus.example');
+    // The screen header is custom, so a preflight asks about it by name.
+    expect(res.headers.get('access-control-allow-headers')?.toLowerCase())
+      .toContain('x-proteus-screen');
+    await s.stop();
+  });
+
+  it('does not allow an origin that is not on the list', async () => {
+    const s = await startTestServer(t.repos, { allowedOrigins: ['https://proteus.example'] });
+    const res = await fetch(`${s.url}/projects`, {
+      headers: { ...authFor('uid-1'), origin: 'https://evil.example' },
+    });
+    // A wildcard here would let any page read a signed-in user's projects.
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
+    await s.stop();
+  });
+});

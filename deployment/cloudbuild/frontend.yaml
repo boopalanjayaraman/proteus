@@ -1,0 +1,51 @@
+# Builds and pushes the Proteus frontend image.
+#
+#   gcloud builds submit --config=deployment/cloudbuild/frontend.yaml \
+#     --substitutions=_REGION=us-central1,_API_URL=https://...,_FB_API_KEY=...,\
+# _FB_AUTH_DOMAIN=...,_FB_PROJECT_ID=...,_FB_APP_ID=...
+#
+# Every VITE_* value is inlined into the bundle at build time and is PUBLIC once
+# shipped. None of these is a secret: Firebase web config identifies a project,
+# it does not protect it. The Gemini key, the database URI and the GitHub token
+# live in the backend's environment and must never appear here.
+
+substitutions:
+  _REGION: us-central1
+  _REPO: proteus
+  _TAG: latest
+  _API_URL: ''
+  _FB_API_KEY: ''
+  _FB_AUTH_DOMAIN: ''
+  _FB_PROJECT_ID: ''
+  _FB_APP_ID: ''
+
+images:
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/frontend:${_TAG}'
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/frontend:latest'
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - '-f'
+      - deployment/frontend/Dockerfile
+      - '--build-arg'
+      - 'VITE_API_BASE_URL=${_API_URL}'
+      - '--build-arg'
+      - 'VITE_FIREBASE_API_KEY=${_FB_API_KEY}'
+      - '--build-arg'
+      - 'VITE_FIREBASE_AUTH_DOMAIN=${_FB_AUTH_DOMAIN}'
+      - '--build-arg'
+      - 'VITE_FIREBASE_PROJECT_ID=${_FB_PROJECT_ID}'
+      - '--build-arg'
+      - 'VITE_FIREBASE_APP_ID=${_FB_APP_ID}'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/frontend:${_TAG}'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/frontend:latest'
+      - .
+
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1200s

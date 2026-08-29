@@ -1,0 +1,35 @@
+# Builds and pushes the Proteus backend image.
+#
+#   gcloud builds submit --config=deployment/cloudbuild/backend.yaml \
+#     --substitutions=_REGION=us-central1,_TAG=$(git rev-parse --short HEAD)
+#
+# A config rather than `gcloud builds submit --tag`, because that form only
+# looks for a Dockerfile at the root of the source directory and this repository
+# has two images in `deployment/`. It also means the build runs in Cloud Build
+# rather than needing Docker on whoever is deploying.
+
+substitutions:
+  _REGION: us-central1
+  _REPO: proteus
+  _TAG: latest
+
+images:
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/backend:${_TAG}'
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/backend:latest'
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - '-f'
+      - deployment/backend/Dockerfile
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/backend:${_TAG}'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/backend:latest'
+      - .
+
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1200s
