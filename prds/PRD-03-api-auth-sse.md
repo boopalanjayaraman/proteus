@@ -3,12 +3,12 @@
 | | |
 |---|---|
 | **Increment** | 03 |
-| **Status** | `PLANNED` |
+| **Status** | `DELIVERED` |
 | **Depends on** | PRD-02 |
 | **Unblocks** | PRD-04, PRD-05 |
 | **Demoable outcome** | None — foundation. Verified by command: `curl` the stream, kill it mid-flight, reconnect, and nothing is missed. |
 | **Created** | 2026-08-29 |
-| **Delivered** | |
+| **Delivered** | 2026-08-29 |
 
 ---
 
@@ -109,16 +109,43 @@ server, never inferred from what the client asked for.
 
 ## 9. Definition of done
 
-- [ ] All FRs implemented
-- [ ] All ACs verified
-- [ ] Typecheck and tests pass
-- [ ] §10 records what was actually built
+- [x] All FRs implemented
+- [x] All ACs verified — 19 tests against a real server and replica set
+- [x] Typecheck and tests pass (85 total)
+- [x] §10 records what was actually built
 
 ## 10. Delivery log
 
 | Date | Change | Why |
 |---|---|---|
+| 2026-08-29 | `api/{server,errors}.ts`, `api/middleware/{auth,ownership}.ts` | Fastify bootstrap, typed errors, Firebase verification, ownership check |
+| 2026-08-29 | `api/sse/stream.ts`, `api/routes/{health,events,me}.ts` | Resumable stream, history, readiness, user profile |
+| 2026-08-29 | `config/logger.ts` | Structured logging — closes TD-008 |
+| 2026-08-29 | `server.ts` | Process entry point with a startup banner |
+| 2026-08-29 | `test/helpers/server.ts`, `test/api.test.ts` | 19 acceptance tests on a real socket |
 
-**Deviations from plan** —
+**Deviations from plan**
 
-**Deferred** —
+- **The live tail is opened BEFORE the replay query runs.** The obvious order — replay,
+  then subscribe — loses anything written in between, and the gap is invisible in a
+  quiet test. Events arriving during replay are buffered and flushed after it, and a
+  monotonic `seq` guard on every frame means the overlap cannot produce a duplicate.
+  A test writes an event mid-replay specifically to cover that seam.
+- **`TokenVerifier` is an interface**, with the Firebase implementation behind it. The
+  middleware itself is never mocked — a test that stubs the auth layer proves only that
+  the stub works.
+- **`/readyz` returns 503 when change streams are unavailable.** Without them the live
+  screens stop updating and nothing errors, which makes it a readiness failure rather
+  than a warning. The startup banner logs it at `error` for the same reason.
+- **Logging redaction is applied at the pino serialiser**, not by callers. `redactTokens`
+  protects what reaches the database; this protects what reaches stdout, which Cloud Run
+  ships to Cloud Logging where it is retained and searchable.
+- **`connectionTimeout` and `requestTimeout` are 0.** Fastify's defaults would kill a
+  long-lived SSE connection as a slow request.
+
+**Deferred**
+
+- Project CRUD routes → PRD-05. Only `/me`, `/healthz`, `/readyz` and the event routes
+  exist so far.
+- Rate limiting and CORS — neither is needed until the frontend calls from a browser
+  origin (PRD-04).

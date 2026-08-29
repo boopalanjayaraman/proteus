@@ -146,7 +146,7 @@ debt:
 
   - id: TD-008
     title: No structured logging
-    severity: MEDIUM
+    severity: RESOLVED
     raised: 2026-08-29
     incurred_in: PRD-02
     where: src/backend
@@ -161,6 +161,11 @@ debt:
       Pino, with the redaction from `redactTokens` applied to the serialiser so an
       operational log cannot leak what the event log is careful about.
     revisit: PRD-03, alongside the server bootstrap.
+    resolved: 2026-08-29
+    resolution: >
+      src/backend/src/config/logger.ts. Pino with scrubbing at the serialiser hook plus
+      key-path redaction, so neither a token in a message nor a secret in a nested object
+      reaches stdout. Wired through Fastify and the startup banner.
 ```
 
 ---
