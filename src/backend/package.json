@@ -12,11 +12,13 @@
     "build": "tsc -p tsconfig.json --noEmit false --outDir dist"
   },
   "dependencies": {
+    "@genkit-ai/googleai": "^1.28.0",
     "@google-cloud/secret-manager": "^7.0.0",
     "@google-cloud/storage": "^7.22.0",
     "@proteus/schema": "*",
     "fastify": "^5.12.1",
     "firebase-admin": "^14.3.0",
+    "genkit": "^1.41.0",
     "mongodb": "^7.6.0",
     "unpdf": "^1.8.1",
     "yaml": "^2.6.1"

@@ -4,7 +4,7 @@ import {
   redactTokens,
   type EmitEventInput,
 } from '@proteus/schema';
-import type { ChangeStream, Db } from 'mongodb';
+import type { Db } from 'mongodb';
 import { nextEventSeq } from '../db/counters';
 import { Repository } from './base';
 
@@ -97,7 +97,7 @@ export class EventRepository extends Repository<typeof ProjectEvent> {
    * emitter would silently deliver nothing. This is what makes the fan-out
    * correct without adding Redis or Pub/Sub.
    */
-  watch(projectId: string, onEvent: (e: ProjectEvent) => void): ChangeStream {
+  watch(projectId: string, onEvent: (e: ProjectEvent) => void): Subscription {
     const stream = this.collection.watch(
       [{ $match: { operationType: 'insert', 'fullDocument.projectId': projectId } }],
       { fullDocument: 'updateLookup' },
@@ -106,8 +106,20 @@ export class EventRepository extends Repository<typeof ProjectEvent> {
       const doc = (change as { fullDocument?: ProjectEvent }).fullDocument;
       if (doc) onEvent(doc);
     });
-    return stream;
+    return { close: () => stream.close() };
   }
+}
+
+/**
+ * An opaque subscription handle.
+ *
+ * The repository layer owns the driver; callers get something they can close and
+ * nothing they can query. Without this the API layer has to name `mongodb` just
+ * to type a variable, which quietly breaks the rule that only `core/` touches the
+ * database — the architecture test catches exactly that.
+ */
+export interface Subscription {
+  close: () => Promise<void>;
 }
 
 function isDuplicateKey(e: unknown): boolean {

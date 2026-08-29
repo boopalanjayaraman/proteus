@@ -50,7 +50,8 @@ migration loop cannot be built before the plan it executes exists.
 | 04 | `DELIVERED` — 2026-08-29, 12 acceptance tests; shell renders and builds |
 | 05 | `DELIVERED` — 2026-08-29, 18 acceptance tests; landing and create screens |
 | 06 | `DELIVERED` — 2026-08-29, 17 acceptance tests against the real fixture |
-| 07–14 | `PLANNED` |
+| 07 | `PARTIALLY DELIVERED` — 2026-08-29, agent + run orchestration; screen carries to 08 |
+| 08–14 | `PLANNED` |
 
 ## Conventions
 

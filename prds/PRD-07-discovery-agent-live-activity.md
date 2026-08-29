@@ -3,12 +3,12 @@
 | | |
 |---|---|
 | **Increment** | 07 |
-| **Status** | `PLANNED` |
+| **Status** | `PARTIALLY DELIVERED` |
 | **Depends on** | PRD-04, PRD-06 |
 | **Unblocks** | PRD-08, PRD-09 |
 | **Demoable outcome** | Create a project and watch the agent analyse it unattended — the feed streams findings as they are made, and survives a refresh. |
 | **Created** | 2026-08-29 |
-| **Delivered** | |
+| **Delivered** | 2026-08-29 (backend); screen outstanding |
 
 ---
 
@@ -107,16 +107,50 @@ not: before approval the system may read, correlate and propose, and nothing els
 
 ## 9. Definition of done
 
-- [ ] All FRs implemented
-- [ ] All ACs verified
-- [ ] Typecheck and tests pass
-- [ ] §10 records what was actually built
+- [x] FR-1 to FR-10 implemented (backend)
+- [ ] FR-11 — Live Discovery screen not yet built
+- [x] AC-1 to AC-9 verified — 16 tests
+- [x] Typecheck and tests pass (142 total)
+- [x] §10 records what was actually built
 
 ## 10. Delivery log
 
 | Date | Change | Why |
 |---|---|---|
+| 2026-08-29 | `test/architecture.test.ts`, `eslint.config.js` | The import boundary, enforced — TD-005 |
+| 2026-08-29 | `agent/tools/registry.ts` | Tool tables as data, so a test can assert the boundary |
+| 2026-08-29 | `agent/prompts/discovery.ts` | A1's system instruction, versioned as a file |
+| 2026-08-29 | `agent/model.ts` | Gemini client behind an interface, plus `ScriptedModel` |
+| 2026-08-29 | `agent/flows/discovery.ts` | A1 — usage resolution, correlation, sufficiency |
+| 2026-08-29 | `core/services/discovery.ts` | Run orchestration: lease, checkpoint, progress, persistence |
 
-**Deviations from plan** —
+**Deviations from plan**
 
-**Deferred** —
+- **The import boundary is a test, not a lint rule.** `eslint-plugin-import` does not
+  support eslint 9, and a test states the rule more directly, runs in CI with everything
+  else, and can explain itself when it fails. **It found a real violation on its first
+  run**: `api/sse/stream.ts` imported the Mongo driver to type a variable. The repository
+  now returns an opaque `Subscription`, so only `core/` names the driver.
+- **`ScriptedModel` replaces token generation, not the agent.** The agent, its schemas and
+  its validation all run for real; a scripted answer is parsed by the same schema a real
+  one would be, so a test cannot assert on a shape the system would have rejected.
+- **The agent is never asked to confirm a strong match.** Re-litigating a deterministic
+  result is how a reproducible finding becomes a variable one, so A1 sees only the weak
+  signals. AC-2 asserts `CryptoService` never reaches it.
+- **Confidence is capped below 1.0 in code as well as in the schema.** The schema would
+  reject it, but the intent is clearer stated locally: a model conclusion cannot be
+  certain.
+- **`UNKNOWN` is a first-class answer**, and it emits at `DETAIL` rather than `ACTIVITY` —
+  an undetermined usage belongs in the audit drawer, not the live feed. An agent that must
+  always decide will always decide, including when it should not.
+- **Fixed a bug in `complete()`**: passing `{ summary: undefined }` to a stage transition
+  replaced the whole tile projection, so the dotted update that followed had nothing to
+  write into.
+
+**Deferred**
+
+- **The Live Discovery screen (FR-11)** — the backend produces the feed, progress and
+  findings; the UI that renders them is outstanding. Carrying into PRD-08, which owns the
+  other half of the same screen.
+- Document text extraction with page offsets — no PDFs exist to extract yet.
+- The wire-up that runs clone → detect → agent → persist as one job → PRD-08.

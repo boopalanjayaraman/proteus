@@ -1,7 +1,6 @@
 import type { ProjectEvent } from '@proteus/schema';
 import type { FastifyReply } from 'fastify';
-import type { ChangeStream } from 'mongodb';
-import type { Repositories } from '../../core/repositories';
+import type { Repositories, Subscription } from '../../core/repositories';
 
 /**
  * Server-Sent Events, with resume.
@@ -59,7 +58,7 @@ export async function openEventStream(
   // the replay would drop anything written during it.
   const buffered: ProjectEvent[] = [];
   let replaying = true;
-  const stream: ChangeStream = repos.events.watch(projectId, (e) => {
+  const stream: Subscription = repos.events.watch(projectId, (e) => {
     if (replaying) buffered.push(e);
     else send(e);
   });

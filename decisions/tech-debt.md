@@ -95,7 +95,7 @@ debt:
 
   - id: TD-005
     title: No lint, format or CI
-    severity: MEDIUM
+    severity: PARTIALLY_RESOLVED
     raised: 2026-08-29
     incurred_in: PRD-01
     where: repository root
@@ -112,6 +112,15 @@ debt:
       ESLint with `import/no-restricted-paths` for the boundary, Prettier, and a GitHub
       Actions workflow running typecheck plus tests.
     revisit: Before PRD-07 — that is the increment that introduces agent code.
+    resolved: 2026-08-29
+    resolution: >
+      The part that mattered is done. The import boundary is enforced by
+      test/architecture.test.ts rather than a lint rule — eslint-plugin-import does not
+      support eslint 9, and a test states the rule more directly and runs in CI with
+      everything else. It found a real violation on its first run: api/sse/stream.ts
+      imported the Mongo driver for a type, so the repository now returns an opaque
+      Subscription handle. eslint.config.js exists for general linting.
+      STILL OUTSTANDING: no CI workflow. Nothing runs on push.
 
   - id: TD-006
     title: The rules engine loads YAML from a relative path with no caching
@@ -143,6 +152,23 @@ debt:
       Remove CryptoUtils.wrapKey and route the export through CryptoService. Four lines,
       and the demo becomes more reliable and less honest at the same time.
     revisit: After the first end-to-end run. Keep it if the agent handles both cleanly.
+
+  - id: TD-009
+    title: Genkit is typed against Zod 3; this project uses Zod 4
+    severity: LOW
+    raised: 2026-08-29
+    incurred_in: PRD-07
+    where: src/backend/src/agent/model.ts
+    context: >
+      genkit 1.41 declares its output schema parameter as a Zod 3 type. The runtime shapes
+      are compatible but the types are not, so passing our Zod 4 schema needs a cast. It is
+      confined to one line.
+    costs: >
+      Nothing functionally — the schema is re-validated immediately afterwards with our own
+      parser, which is the authoritative check regardless. The cast could hide a genuine
+      shape error at that boundary, though the re-parse would catch it.
+    fix: Upgrade when Genkit supports Zod 4, and delete the cast.
+    revisit: On the next Genkit upgrade.
 
   - id: TD-008
     title: No structured logging
