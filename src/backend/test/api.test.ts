@@ -417,3 +417,88 @@ describe('PRD-09 · assessment endpoints', () => {
     expect(body.artifacts[0].contentSnapshot).toBeUndefined();
   });
 });
+
+describe('every project-scoped route is owned, and evidence is fetchable', () => {
+  /**
+   * The frontend calls this to render evidence chips, and both callers swallow
+   * the error — so a missing route showed as "no evidence" rather than as a
+   * failure. It went unregistered through six increments for exactly that reason.
+   */
+  it('returns the evidence a node or finding cites', async () => {
+    const p = await ownedProject();
+    const now = new Date();
+    await t.repos.evidence.insert({
+      _schemaVersion: 1, createdAt: now, updatedAt: now,
+      evidenceId: 'ev_1', projectId: p.projectId,
+      evidenceType: 'SOURCE_CODE', evidenceClass: 'OBSERVED', confidence: 1,
+      source: 'src/main/java/pay/security/CryptoService.java:51',
+      locator: {
+        kind: 'REPO', path: 'src/main/java/pay/security/CryptoService.java',
+        startLine: 51, commitSha: 'abc1234',
+      },
+      producedBy: { actor: 'TOOL', toolName: 'detect' },
+      observedAt: now,
+    } as never);
+
+    const r = await fetch(
+      `${s.url}/projects/${p.projectId}/evidence?ids=ev_1,ev_missing`,
+      { headers: authFor(OWNER) },
+    );
+    expect(r.status).toBe(200);
+    const body = await r.json();
+    expect(body.evidence).toHaveLength(1);
+    expect(body.evidence[0].source).toContain('CryptoService.java:51');
+
+    // No ids is an empty answer, not an error — a node with no evidence is a
+    // real state and the inspector asks anyway.
+    const empty = await fetch(`${s.url}/projects/${p.projectId}/evidence`, {
+      headers: authFor(OWNER),
+    });
+    expect((await empty.json()).evidence).toEqual([]);
+  });
+
+  it("will not return another project's evidence even by exact id", async () => {
+    const mine = await ownedProject(OWNER);
+    const theirs = await ownedProject(OTHER);
+    const now = new Date();
+    await t.repos.evidence.insert({
+      _schemaVersion: 1, createdAt: now, updatedAt: now,
+      evidenceId: 'ev_secret', projectId: theirs.projectId,
+      evidenceType: 'SOURCE_CODE', evidenceClass: 'OBSERVED', confidence: 1,
+      source: 'their/private/File.java:1',
+      locator: { kind: 'REPO', path: 'their/private/File.java', commitSha: 'abc1234' },
+      producedBy: { actor: 'TOOL', toolName: 'detect' }, observedAt: now,
+    } as never);
+
+    // Evidence ids are guessable strings. Filtering on id alone would hand a
+    // citation from another tenant to an authenticated caller.
+    const r = await fetch(
+      `${s.url}/projects/${mine.projectId}/evidence?ids=ev_secret`,
+      { headers: authFor(OWNER) },
+    );
+    expect(r.status).toBe(200);
+    expect((await r.json()).evidence).toEqual([]);
+  });
+
+  it('refuses an id list long enough to be enumeration', async () => {
+    const p = await ownedProject();
+    const ids = Array.from({ length: 101 }, (_, i) => `ev_${i}`).join(',');
+    const r = await fetch(`${s.url}/projects/${p.projectId}/evidence?ids=${ids}`, {
+      headers: authFor(OWNER),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('lists only the caller’s own projects', async () => {
+    await ownedProject(OWNER);
+    await ownedProject(OWNER);
+    await ownedProject(OTHER);
+
+    const mine = await (await fetch(`${s.url}/projects`, { headers: authFor(OWNER) })).json();
+    const theirs = await (await fetch(`${s.url}/projects`, { headers: authFor(OTHER) })).json();
+
+    expect(mine.count).toBe(2);
+    expect(theirs.count).toBe(1);
+    expect(mine.projects.every((x: { ownerId: string }) => x.ownerId === OWNER)).toBe(true);
+  });
+});

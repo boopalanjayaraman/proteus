@@ -215,8 +215,9 @@ raw assertion in `relevantLogs` passed.
   PRD-14 assembles the report that carries recommendations forward.
 - **Streaming during a build.** Risk 1: a Cloud Build round trip is minutes and the feed
   goes quiet. Events are emitted at the start and end of each execution, not during. With
-  `ProcessExecutor` running locally the gap is seconds; it becomes real with the Cloud
-  Build submission client, which is PRD-14.
+  `ProcessExecutor` running locally the gap is seconds — measured at 7s for the reference
+  fixture's suite with a warm cache — so it is not felt today. It becomes real with the
+  Cloud Build submission client. Both that client and the streaming land in PRD-16.
 - **The revert is recorded, not performed.** `EXEC-REP-003` marks the superseded change
   `REVERTED` and the agent is told what was already tried, so the next attempt differs.
   A `git revert` commit is not issued — the subsequent patch overwrites the same files,

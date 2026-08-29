@@ -1,4 +1,5 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { EventStream } from '../src/api/stream';
@@ -161,8 +162,23 @@ describe('AC-2 · every request carries a fresh token', () => {
 });
 
 describe('AC-6 · the bundle contains no backend secret', () => {
+  /**
+   * Builds if `dist` is absent rather than reading whatever a previous command
+   * happened to leave there.
+   *
+   * This check is about the shipped bytes, so it needs a build — but depending
+   * on one having already run makes it pass or fail on command order, and a
+   * secret-leak test that silently skips is worse than no test. Vite builds this
+   * app in about a tenth of a second, so producing one is cheaper than the
+   * ambiguity.
+   */
   it('ships nothing from src/backend/.env', () => {
-    const dist = join(import.meta.dirname, '..', 'dist', 'assets');
+    const root = join(import.meta.dirname, '..');
+    const dist = join(root, 'dist', 'assets');
+    if (!existsSync(dist)) {
+      execFileSync('npx', ['vite', 'build'], { cwd: root, stdio: 'ignore' });
+    }
+
     let bundle = '';
     for (const f of readdirSync(dist)) {
       if (f.endsWith('.js')) bundle += readFileSync(join(dist, f), 'utf8');

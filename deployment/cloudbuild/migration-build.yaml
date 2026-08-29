@@ -15,6 +15,12 @@
 #                          agent reads the XML; a summary would discard the
 #                          per-test detail the diagnosis depends on.
 #
+# DEPENDENCY CACHE. A cold Maven repository costs 33 seconds on the reference
+# fixture — measured — and a migration runs the suite about five times, so an
+# uncached pipeline pays it on every one. The cache is keyed by a hash of the
+# build manifest, because that is exactly what decides the dependency set: the
+# same pom resolves the same tree, and a changed pom should miss.
+#
 # Substitutions are supplied per execution by the executor:
 #   _REPO_URL     the repository, cloned at _COMMIT_SHA
 #   _COMMIT_SHA   the commit under test — the approved base, or a branch head
@@ -22,9 +28,11 @@
 #   _BUILD_CMD    compile only, tests skipped
 #   _TEST_CMD     the test run
 #   _RESULTS_URI  gs://<bucket>/projects/<id>/runs/<executionRunId>
+#   _CACHE_URI    gs://<bucket>/cache/maven — where the dependency tars live
 
 substitutions:
   _BUILD_IMAGE: 'maven:3.9-eclipse-temurin-17'
+  _CACHE_URI: 'gs://proteus-cache/maven'
   _BUILD_CMD: 'mvn -B -q -DskipTests package'
   _TEST_CMD: 'mvn -B verify'
 
@@ -52,11 +60,37 @@ steps:
         # The credential must not survive into the tree the build runs against.
         git remote set-url origin "https://${_REPO_URL}"
 
+  # /workspace persists between steps of one build but not between builds, so
+  # the cache is restored into it and the Maven repository pointed at it.
+  - id: restore-cache
+    name: 'gcr.io/cloud-builders/gsutil'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        set -uo pipefail
+        mkdir -p /workspace/.m2
+        KEY=$(sha256sum /workspace/src/pom.xml 2>/dev/null | cut -c1-16)
+        KEY=${KEY:-nopom}
+        echo "$$KEY" > /workspace/.cache-key
+        if gsutil -q stat "${_CACHE_URI}/m2-$$KEY.tar.gz" 2>/dev/null; then
+          echo "cache hit: $$KEY"
+          gsutil -q cp "${_CACHE_URI}/m2-$$KEY.tar.gz" - | tar xz -C /workspace/.m2 || true
+          echo hit > /workspace/.cache-state
+        else
+          echo "cache miss: $$KEY — this build populates it"
+          echo miss > /workspace/.cache-state
+        fi
+
   - id: build
     name: '${_BUILD_IMAGE}'
     dir: '/workspace/src'
     entrypoint: 'bash'
-    args: ['-c', 'set -o pipefail; ${_BUILD_CMD} 2>&1 | tee /workspace/build.log']
+    args:
+      - '-c'
+      - |
+        set -o pipefail
+        ${_BUILD_CMD} -Dmaven.repo.local=/workspace/.m2 2>&1 | tee /workspace/build.log
 
   # allowFailure is the whole point: a red test run is a result, not an error.
   # Failing the pipeline here would discard the reports that explain why.
@@ -65,7 +99,26 @@ steps:
     dir: '/workspace/src'
     entrypoint: 'bash'
     allowFailure: true
-    args: ['-c', 'set -o pipefail; ${_TEST_CMD} 2>&1 | tee /workspace/test.log']
+    args:
+      - '-c'
+      - |
+        set -o pipefail
+        ${_TEST_CMD} -Dmaven.repo.local=/workspace/.m2 2>&1 | tee /workspace/test.log
+        echo $$? > /workspace/test.exit
+
+  # Written only on a miss. Re-uploading an unchanged tar on every build would
+  # cost more egress than the cache saves.
+  - id: save-cache
+    name: 'gcr.io/cloud-builders/gsutil'
+    entrypoint: 'bash'
+    allowFailure: true
+    args:
+      - '-c'
+      - |
+        set -uo pipefail
+        [ "$(cat /workspace/.cache-state 2>/dev/null)" = "miss" ] || exit 0
+        KEY=$(cat /workspace/.cache-key)
+        tar cz -C /workspace/.m2 . | gsutil -q cp - "${_CACHE_URI}/m2-$$KEY.tar.gz"
 
   - id: collect
     name: 'gcr.io/cloud-builders/gsutil'

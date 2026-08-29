@@ -51,7 +51,9 @@ migration loop cannot be built before the plan it executes exists.
 | 05 | `DELIVERED` — 2026-08-29, 18 acceptance tests; landing and create screens |
 | 06 | `DELIVERED` — 2026-08-29, 17 acceptance tests against the real fixture |
 | 07 | `PARTIALLY DELIVERED` — 2026-08-29, agent + run orchestration; screen carries to 08 |
-| 08–14 | `PLANNED` |
+| 08–14 | `DELIVERED` — 2026-08-29 |
+| 15 | `PLANNED` — audit log |
+| 16 | `PLANNED` — GCP execution and sandbox hosting. What a Cloud-Run-hosted Proteus needs: `CloudBuildExecutor`, `CloudRunDeployer`, live build streaming, caps per D-020 |
 
 ## Conventions
 

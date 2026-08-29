@@ -180,7 +180,7 @@ difference is visible without reading a line of source.
 
 6. **`LocalDockerDeployer` stands in for a Cloud Run client.** Both satisfy one interface
    and the local one builds the same image from the same Dockerfile, so the checks that
-   matter are exercised identically. The Cloud Run submission client is deferred to PRD-14
+   matter are exercised identically. The Cloud Run submission client is deferred to PRD-16
    with the rest of deployment, alongside the Cloud Build one.
 
 7. **Latency delta is measured and reported, never gated.** `EXEC-ESC-007` is explicit
@@ -214,7 +214,7 @@ expected-to-change invariant test, which needs exactly that message shape.
   `onVerified` when the verdict is `VERIFIED`; nothing supplies it, and `EXEC-VER-013`
   already requires `MIGRATION_REPORT`, `GIT_DIFF` and `BUILD_TEST_EVIDENCE` before the
   migration may be reported complete.
-- **Cloud Run and Cloud Build submission clients.** Both interfaces are done and both have
+- **Cloud Run and Cloud Build submission clients** (→ PRD-16). Both interfaces are done and both have
   a working local implementation. Wiring the GCP clients is one deployment task, deferred
   with TD-012 and the rest of PRD-14.
 - **Sandbox teardown.** `expiresAt` is recorded seven days out so a sweep can find the

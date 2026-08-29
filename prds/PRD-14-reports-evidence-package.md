@@ -186,7 +186,7 @@ blocking piece was done and the rest is named:
 
 **Deferred** —
 
-- **The Cloud Build and Cloud Run submission clients.** Both interfaces are complete with
+- **The Cloud Build and Cloud Run submission clients** (→ PRD-16). Both interfaces are complete with
   working local implementations, and both were verified against the real fixture —
   `ProcessExecutor` ran the Maven suite in `maven:3.9-eclipse-temurin-17`, and
   `LocalDockerDeployer` built and started the fixture's own image. Swapping in the GCP

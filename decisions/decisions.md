@@ -573,4 +573,44 @@ decisions:
       that silently corrects a source produces an uncitable rule; one that copies blindly
       produces a wrong one.
     decided_on: 2026-08-28
+  - id: D-020
+    title: Sandbox hosting caps, and what happens past them
+    category: product
+    status: ACCEPTED
+    raised: 2026-08-29
+    blocks: [PRD-16]
+    context: >
+      Once the migrated application is hosted on Cloud Run rather than locally, every
+      demo leaves a live public URL and a container image behind, and nothing in the
+      product removes either. The binding constraint is not spend — Cloud Run scales to
+      zero, and thirty images is a few dollars a month — but that a URL labelled "not
+      production" should not outlive the review it exists for, and that unreviewed
+      third-party code should have a bounded blast radius.
+    options:
+      - One global cap, refuse past it
+      - Per-user and platform caps, refuse past them
+      - Per-user and platform caps, fall back to local hosting past them
+    recommendation: Per-user and platform caps with a local fallback.
+    impact_if_unresolved: >
+      Either an unbounded number of forgotten public URLs, or a demo that fails for the
+      fourth person to try it.
+    comment: ""
+    decision: >
+      3 per user, 30 platform-wide, and a rerun of the same project replaces its
+      container rather than adding one. All four limits are environment variables, not
+      constants.
+
+      The caps bound what is RETAINED, not what is deployed. Every migration deploys,
+      probes and exercises a real sandbox; past a cap it is released immediately after the
+      end-to-end scenarios pass, so the verdict is complete and only the shareable link is
+      absent. Refusing to deploy was rejected because the sandbox checks are what spec §35
+      requires for VERIFIED, and reporting a correct migration as unverified because the
+      platform was busy states a falsehood about someone's code.
+
+      An earlier version of this decision fell back to LOCAL hosting past a cap. That was
+      revised on the same day: Cloud Run has no Docker daemon, so a Cloud-Run-hosted
+      Proteus cannot run a container locally at all, and a fallback that is unavailable in
+      the target topology is not a fallback.
+    decided_on: 2026-08-29
+    revised_on: 2026-08-29
 ```
