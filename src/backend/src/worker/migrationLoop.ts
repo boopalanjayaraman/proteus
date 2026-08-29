@@ -21,6 +21,9 @@ import {
   MAX_MEANINGFUL_AUTONOMOUS_ATTEMPTS, recordAttempt, resolveThread,
 } from '../core/migration/problems';
 import { guardTestArtifact } from '../core/migration/testGuard';
+import {
+  GROUP_LABEL, ProgressTracker, buildGroups, parseLine, totalsFor,
+} from '../core/migration/progress';
 import type { RuleEngine } from '../core/rules/engine';
 import type { Repositories } from '../core/repositories';
 import type { BuildExecutor } from '../integrations/cloudbuild/executor';
@@ -280,9 +283,35 @@ async function runPlanItem(
     });
 
     current = await advance(repos, current, iteration === 0 ? 'RUNNING_TESTS' : 'RETESTING');
+    // Live progress, read off the build's own output. The denominator comes
+    // from the baseline, which recorded every test before anything moved — Maven
+    // never announces how many classes it is about to run, which is why a
+    // progress bar looked impossible until the baseline was the answer.
+    const groups = buildGroups({
+      baseline,
+      approvedItems: [item],
+      changes: await repos.migrationChanges.find({
+        migrationRunId: current.migrationRunId,
+      } as never) as never,
+    });
+    const tracker = new ProgressTracker(totalsFor({
+      baseline,
+      changes: await repos.migrationChanges.find({
+        migrationRunId: current.migrationRunId,
+      } as never) as never,
+    }));
+
     const execution = await deps.baselines.execute(
       current, iteration === 0 ? 'INTEGRATION_TEST' : 'UNIT_TEST', deps.commands.test,
-      { workdir: deps.workdir },
+      {
+        workdir: deps.workdir,
+        onLine: (line) => {
+          const event = parseLine(line, groups);
+          if (!event) return;
+          tracker.apply(event);
+          void emitProgress(repos, project.projectId, current.stage, event, tracker);
+        },
+      },
     );
     await repos.migrationAttempts.collection.updateOne(
       { attemptId: attempt.attemptId } as never,
@@ -862,3 +891,68 @@ async function resolveThreadFor(
     run.migrationRunId,
   );
 }
+
+/**
+ * One feed line per thing that happened, while it is happening.
+ *
+ * `DETAIL` because spec §38 splits the live activity stream from the audit
+ * trail by level, and thirty suite lines belong in the drawer rather than in
+ * the milestone feed beside "migration approved". The screen reads them and
+ * renders the grouped bars; the milestone feed stays legible.
+ */
+async function emitProgress(
+  repos: Repositories,
+  projectId: string,
+  stage: MigrationRun['stage'],
+  event: ReturnType<typeof parseLine>,
+  tracker: ProgressTracker,
+): Promise<void> {
+  if (!event) return;
+  const snapshot = tracker.snapshot();
+  const counted = snapshot.totals.known
+    ? `${snapshot.testsFinished}/${snapshot.totals.tests} tests · `
+      + `${snapshot.suitesFinished}/${snapshot.totals.suites} suites`
+    // The baseline run has no denominator and says so, rather than rendering a
+    // bar that cannot fill.
+    : `${snapshot.suitesFinished} suites so far`;
+
+  const [title, message, severity] = describe(event);
+  if (!title) return;
+
+  await repos.events.emit(projectId, {
+    type: severity === 'ERROR' ? 'TEST_FAILED' : 'TEST_STARTED',
+    phase: 'MIGRATION', level: 'DETAIL', severity,
+    stage,
+    title,
+    message: `${message}${message ? ' · ' : ''}${counted}`,
+    actor: 'TOOL', refs: {},
+  }).catch(() => undefined);
+}
+
+function describe(
+  event: NonNullable<ReturnType<typeof parseLine>>,
+): [string, string, 'INFO' | 'SUCCESS' | 'ERROR'] {
+  switch (event.kind) {
+    case 'PHASE':
+      return [event.phase, '', 'INFO'];
+    case 'SUITE_STARTED':
+      return [`${short(event.suite)}`, GROUP_LABEL[event.group], 'INFO'];
+    case 'SUITE_FINISHED':
+      return [
+        `${short(event.suite)} — ${event.passed
+          ? `${event.total} passed`
+          : `${event.failures + event.errors} of ${event.total} failed`}`,
+        `${GROUP_LABEL[event.group]} · ${event.seconds.toFixed(2)}s`,
+        event.passed ? 'SUCCESS' : 'ERROR',
+      ];
+    case 'TEST_FAILED':
+      // The one line that matters most, and the reason failures are worth
+      // streaming at all: Surefire names the failing method, and nothing else
+      // in the run does until the XML lands.
+      return [`✗ ${event.method}`, short(event.suite), 'ERROR'];
+    case 'FAILURE_DETAIL':
+      return event.message ? [event.message, event.at ?? '', 'ERROR'] : ['', '', 'INFO'];
+  }
+}
+
+const short = (suite: string): string => suite.split('.').pop() ?? suite;

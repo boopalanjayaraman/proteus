@@ -65,7 +65,29 @@ export function registerMeRoutes(app: FastifyInstance, repos: Repositories): voi
 export function registerMaintenanceRoutes(
   app: FastifyInstance,
   repos: Repositories,
+  /** Sandbox reclaim. Absent where hosting is not configured. */
+  sandboxSweep?: () => Promise<{ scanned: number; reclaimed: string[];
+    failed: Array<{ projectId: string; reason: string }> }>,
 ): void {
+  /**
+   * Reclaims expired sandboxes — services and images both.
+   *
+   * The image is the half that matters: Cloud Run scales to zero, so a stopped
+   * service was already free, and the Artifact Registry storage is what accrues.
+   */
+  app.post('/maintenance/sandbox-sweep', async () => {
+    if (!sandboxSweep) return { configured: false, scanned: 0, reclaimed: 0 };
+    const result = await sandboxSweep();
+    return {
+      configured: true,
+      scanned: result.scanned,
+      reclaimed: result.reclaimed.length,
+      // Reported rather than thrown: one sandbox whose service was already
+      // deleted by hand must not stop the sweep reclaiming the rest.
+      failed: result.failed,
+    };
+  });
+
   app.post('/maintenance/rotation-sweep', async () => {
     const result = await sweepRotations(repos);
     return {

@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -24,6 +24,19 @@ export interface ExecutionSpec {
   command: string;
   commitSha: string;
   timeoutMs?: number;
+  /**
+   * Called for every line the build writes, while it is still running.
+   *
+   * The reason the executor streams at all. Maven reports each test class as it
+   * starts and again when it finishes, and names every failing method with its
+   * assertion message — all of it minutes before the JUnit XML exists on a Cloud
+   * Build round trip. Buffering the run throws that away and leaves the feed
+   * still for the whole execution.
+   *
+   * Never throws into the run: a listener that fails must not fail the build it
+   * is only watching.
+   */
+  onLine?: (line: string) => void;
 }
 
 export interface TestReportFile {
@@ -73,36 +86,7 @@ export class ProcessExecutor implements BuildExecutor {
   async run(spec: ExecutionSpec): Promise<ExecutionOutcome> {
     const started = Date.now();
     const [file, args] = this.commandLine(spec);
-
-    let exitCode = 0;
-    let log: string;
-    let timedOut = false;
-
-    try {
-      const { stdout, stderr } = await new Promise<{ stdout: string; stderr: string }>(
-        (resolve, reject) => {
-          execFile(
-            file, args,
-            {
-              cwd: spec.workdir,
-              timeout: spec.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-              maxBuffer: 32 * 1024 * 1024,
-              env: { ...process.env, MAVEN_OPTS: '-Dstyle.color=never' },
-            },
-            (err, out, errOut) => (err ? reject(Object.assign(err, { stdout: out, stderr: errOut }))
-              : resolve({ stdout: out, stderr: errOut })),
-          );
-        },
-      );
-      log = `${stdout}${stderr}`;
-    } catch (e) {
-      const err = e as NodeJS.ErrnoException & {
-        stdout?: string; stderr?: string; code?: unknown; killed?: boolean; signal?: string;
-      };
-      log = `${err.stdout ?? ''}${err.stderr ?? ''}` || String(err.message);
-      timedOut = err.killed === true || err.signal === 'SIGTERM';
-      exitCode = typeof err.code === 'number' ? err.code : 1;
-    }
+    const { exitCode, log, timedOut } = await this.spawn(file, args, spec);
 
     // Reports are collected whether or not the command succeeded. A failing
     // build still produces test results, and those results are the evidence.
@@ -117,6 +101,72 @@ export class ProcessExecutor implements BuildExecutor {
       reports,
       provider: {},
     };
+  }
+
+  /**
+   * Runs the command, delivering complete lines as they arrive.
+   *
+   * `spawn` rather than `execFile` because `execFile` buffers until exit. The
+   * partial-line carry matters: a chunk boundary lands mid-line often enough
+   * that emitting raw chunks would split `Tests run: 4, Fail…` across two
+   * events and defeat the parser reading them.
+   */
+  private spawn(
+    file: string,
+    args: string[],
+    spec: ExecutionSpec,
+  ): Promise<{ exitCode: number; log: string; timedOut: boolean }> {
+    return new Promise((resolve) => {
+      const child = spawn(file, args, {
+        cwd: spec.workdir,
+        env: { ...process.env, MAVEN_OPTS: '-Dstyle.color=never' },
+      });
+
+      const chunks: string[] = [];
+      let carry = '';
+      let timedOut = false;
+
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill('SIGTERM');
+      }, spec.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+
+      const consume = (buf: Buffer): void => {
+        const text = buf.toString('utf8');
+        chunks.push(text);
+        carry += text;
+        const lines = carry.split('\n');
+        carry = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!spec.onLine) continue;
+          // A listener that throws must not take the build with it — it is
+          // watching, not participating.
+          try {
+            spec.onLine(line);
+          } catch {
+            /* ignore */
+          }
+        }
+      };
+
+      child.stdout?.on('data', consume);
+      child.stderr?.on('data', consume);
+
+      const finish = (code: number): void => {
+        clearTimeout(timer);
+        if (carry && spec.onLine) {
+          try {
+            spec.onLine(carry);
+          } catch {
+            /* ignore */
+          }
+        }
+        resolve({ exitCode: code, log: chunks.join(''), timedOut });
+      };
+
+      child.on('error', (e) => finish(chunks.push(String(e.message)) && 1));
+      child.on('close', (code) => finish(timedOut ? 124 : code ?? 1));
+    });
   }
 
   private commandLine(spec: ExecutionSpec): [string, string[]] {

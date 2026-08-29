@@ -52,6 +52,14 @@ export class ConfigError extends Error {
 
 const nonEmpty = z.string().trim().min(1);
 
+/** An env var is always a string; these are the two coercions that need saying. */
+const numeric = z.coerce.number().int().nonnegative();
+const bool = z
+  .string()
+  .trim()
+  .transform((v) => v.toLowerCase() === 'true' || v === '1')
+  .pipe(z.boolean());
+
 // ---------------------------------------------------------------------------
 // Group schemas
 // ---------------------------------------------------------------------------
@@ -132,6 +140,44 @@ const Gcp = z.object({
 });
 
 /**
+ * Where the migration builds and where the sandbox runs (PRD-16).
+ *
+ * Separate from `Gcp` because it is a policy group rather than a credentials
+ * group: every value has a working default, and a deployment changes them to
+ * change behaviour rather than to make the product function. That is also why it
+ * never fails to load — a missing value here is a default, not a broken feature.
+ */
+const Hosting = z.object({
+  // LOCAL is a development convenience. A Cloud Run container cannot start
+  // another container, so a hosted Proteus must set both of these.
+  BUILD_EXECUTOR: z.enum(['LOCAL', 'CLOUD_BUILD']).default('LOCAL'),
+  BUILD_IMAGE: z.string().trim().default('maven:3.9-eclipse-temurin-17'),
+  CLOUD_BUILD_CACHE_URI: z.string().trim().optional(),
+
+  SANDBOX_PLACEMENT: z.enum(['LOCAL', 'CLOUD_RUN']).default('LOCAL'),
+
+  // Caps on what is RETAINED, never on what is deployed. Past a cap the sandbox
+  // is still built and exercised, then released — verification is never
+  // degraded by capacity (D-020).
+  SANDBOX_MAX_PER_USER: numeric.default(3),
+  SANDBOX_MAX_TOTAL: numeric.default(30),
+  SANDBOX_TTL_DAYS: numeric.default(7),
+  SANDBOX_HARD_TTL_DAYS: numeric.default(30),
+
+  // Blast radius for code that is under test and not trusted. `min-instances`
+  // is absent on purpose: it is always 0, which is what keeps an idle sandbox
+  // free, and no sandbox has a reason to want otherwise.
+  SANDBOX_MAX_INSTANCES: numeric.default(2),
+  SANDBOX_CPU: z.string().trim().default('1'),
+  SANDBOX_MEMORY: z.string().trim().default('512Mi'),
+  SANDBOX_REQUEST_TIMEOUT_SECONDS: numeric.default(60),
+
+  // Adds the names of PASSING methods to the feed, for agent-written suites
+  // only. Failures already stream per method whatever this is.
+  SANDBOX_STREAM_GENERATED_TESTS: bool.default(false),
+});
+
+/**
  * No global token. UX v1.2 made repository access per-project: the PAT is entered on
  * the create-project screen and lives in Secret Manager as
  * proteus-{projectId}-github-pat. A deployment-wide token would defeat that — one leak
@@ -201,6 +247,9 @@ export const gcpConfig = memo(() =>
 );
 
 export const githubConfig = memo(() => load(GitHub, 'repository defaults'));
+
+/** Every value defaults, so this cannot fail — it reports policy, not readiness. */
+export const hostingConfig = memo(() => load(Hosting, 'build and sandbox hosting'));
 
 export const firebaseConfig = memo(() => load(Firebase, 'authentication'));
 

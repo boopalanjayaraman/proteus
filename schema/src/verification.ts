@@ -153,7 +153,30 @@ export const SandboxDeployment = z.object({
 
   /** Literal, so every surface that shows this URL can label it from the data. */
   isProduction: z.literal(false).default(false),
+
+  /**
+   * Where it runs, which decides both whether the URL is shareable and which
+   * caps apply. A local sandbox is verified to the same standard as a hosted one
+   * — `probeStartup` and the scenarios take a URL and nothing else — but it
+   * holds no platform capacity and cannot be sent to anyone.
+   */
+  placement: z.enum(['LOCAL', 'CLOUD_RUN']).default('LOCAL'),
+
   expiresAt: Timestamp.optional(),
+  /**
+   * Reset each time the sandbox is opened through Proteus. This is the
+   * "inactivity" clock, and its limit is stated rather than hidden: someone who
+   * bookmarks the raw URL and visits it directly will not refresh it.
+   */
+  lastAccessedAt: Timestamp.optional(),
+  /** The ceiling no extension passes, so nothing lives indefinitely. */
+  hardExpiresAt: Timestamp.optional(),
+  /**
+   * Why it went away. A capacity release and a failed deployment both end with
+   * no link; only one is a defect, and the report must be able to say which.
+   */
+  tornDownReason: z.enum(['CAPACITY', 'EXPIRED', 'REQUESTED', 'PROJECT_DELETED']).optional(),
+
   deployedAt: Timestamp.optional(),
 });
 export type SandboxDeployment = z.infer<typeof SandboxDeployment>;

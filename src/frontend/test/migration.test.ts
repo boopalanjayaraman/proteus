@@ -3,8 +3,9 @@ import { MigrationStage, type Baseline, type BehavioralInvariant, type Migration
 import {
   ARTIFACT_ORDER, CHECK_LABEL, CHECK_ORDER, CLASSIFICATION_COLOR, MIGRATION_STAGES,
   OUTCOME_COLOR, OUTCOME_LABEL, STAGE_LABEL, STATUS_COLOR, artifactCards, branchMeta,
-  checkRows, checklist, migrationStats, openProblems, outcomeTiles, rail, retryDisplay,
-  sandboxCard, shortSha, summarise, verdictLine, type ProblemSummary,
+  capacityNotice, checkRows, checklist, expiryLabel, groupSummaries, migrationStats,
+  openProblems, outcomeTiles, progressFromEvents, rail, retryDisplay, sandboxCard,
+  shortSha, summarise, verdictLine, type ProblemSummary,
 } from '../src/lib/migration';
 
 /** PRD-11 — what the migration screen claims about progress and the contract. */
@@ -312,5 +313,91 @@ describe('AC-7, AC-2 · the completion screen', () => {
     }
     expect(OUTCOME_COLOR.VERIFIED).toBe('var(--ok)');
     expect(OUTCOME_COLOR.HUMAN_ACTION_REQUIRED).toBe('var(--bad)');
+  });
+});
+
+describe('PRD-16 · live test progress and sandbox lifecycle on screen', () => {
+  /** The events the loop emits, in the shape the feed carries them. */
+  const detail = (type: string, title: string, message: string) =>
+    ({ type, title, message, level: 'DETAIL' });
+
+  const RUN = [
+    detail('TEST_STARTED', 'Running unit tests', '3/5 tests · 1/4 suites'),
+    detail('TEST_STARTED', 'CryptoServiceTest', 'Migration targets · 0/5 tests · 0/4 suites'),
+    detail('TEST_STARTED', 'CryptoServiceTest — 2 passed',
+           'Migration targets · 0.03s · 2/5 tests · 1/4 suites'),
+    detail('TEST_STARTED', 'LedgerRepositoryTest', 'Regression surface · 2/5 tests · 1/4 suites'),
+    detail('TEST_FAILED', 'WrapLengthTest — 1 of 2 failed',
+           'New evidence · 0.03s · 4/5 tests · 2/4 suites'),
+    detail('TEST_FAILED', '✗ wrapsToTwoFiftySix', 'WrapLengthTest'),
+    detail('TEST_FAILED', 'org.opentest4j.AssertionFailedError: expected: <256> but was: <1088>', ''),
+  ];
+
+  it('rebuilds the run from its own events, so a refresh restores the picture', () => {
+    const progress = progressFromEvents(RUN);
+    expect(progress.phase).toBe('Running unit tests');
+    // The denominator the baseline supplied, carried on every line.
+    expect(progress.counted).toBe('4/5 tests · 2/4 suites');
+    expect(progress.suites.map((s) => s.short)).toEqual([
+      'CryptoServiceTest', 'LedgerRepositoryTest', 'WrapLengthTest',
+    ]);
+    expect(progress.suites[0]!.state).toBe('PASSED');
+    expect(progress.suites[1]!.state).toBe('RUNNING');
+    expect(progress.suites[2]!.state).toBe('FAILED');
+  });
+
+  it('attaches the failing method and its assertion to the suite that failed', () => {
+    const failed = progressFromEvents(RUN).suites.find((s) => s.state === 'FAILED')!;
+    // The asymmetry worth rendering: passing methods are only a count, failing
+    // ones are named with the reason.
+    expect(failed.failed).toHaveLength(1);
+    expect(failed.failed[0]!.method).toBe('wrapsToTwoFiftySix');
+    expect(failed.failed[0]!.message).toContain('expected: <256> but was: <1088>');
+  });
+
+  it('groups by the question each suite answers, and hides empty groups', () => {
+    const groups = groupSummaries(progressFromEvents(RUN).suites);
+    expect(groups.map((g) => g.label)).toEqual([
+      'Migration targets', 'New evidence', 'Regression surface',
+    ]);
+    expect(groups[0]!.fraction).toBe(1);
+    expect(groups[1]!.failed).toBe(true);
+    // A running suite is not finished.
+    expect(groups[2]!.finished).toBe(0);
+    // An empty bar for a group with nothing in it reads as a defect.
+    expect(groupSummaries([])).toEqual([]);
+  });
+
+  it('says what will happen before a migration, not after', () => {
+    expect(capacityNotice({ configured: false })).toBeNull();
+    expect(capacityNotice({ configured: true, canRetain: true })).toBeNull();
+
+    const mine = capacityNotice({
+      configured: true, canRetain: false, boundBy: 'USER',
+      perUserUsed: 3, perUserLimit: 3,
+    })!;
+    // Capacity is not a failure, but it is a surprise if the first mention of it
+    // is in the report.
+    expect(mine).toContain('3 of 3');
+    expect(mine).toContain('still be verified end to end');
+    expect(mine).toContain('Tear one down');
+
+    const platform = capacityNotice({
+      configured: true, canRetain: false, boundBy: 'PLATFORM',
+      totalUsed: 30, totalLimit: 30, nextExpiryAt: '2026-09-05T00:00:00Z',
+    })!;
+    expect(platform).toContain('30 of 30');
+    expect(platform).toMatch(/earliest slot frees/);
+  });
+
+  it('states the expiry plainly, including once it has passed', () => {
+    const now = Date.parse('2026-08-29T12:00:00Z');
+    expect(expiryLabel('2026-09-04T12:00:00Z', now)).toBe('EXPIRES IN 6 DAYS');
+    expect(expiryLabel('2026-08-30T12:00:00Z', now)).toBe('EXPIRES IN 1 DAY');
+    expect(expiryLabel('2026-08-29T15:00:00Z', now)).toBe('EXPIRES IN 3 HOURS');
+    // Not hidden — a sandbox past its clock is awaiting the sweep, and the
+    // screen should not imply the link still works.
+    expect(expiryLabel('2026-08-28T12:00:00Z', now)).toBe('EXPIRED · AWAITING RECLAIM');
+    expect(expiryLabel(undefined)).toBe('');
   });
 });

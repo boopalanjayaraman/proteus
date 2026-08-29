@@ -7,6 +7,9 @@ import type { FastifyInstance } from 'fastify';
 import type { Repositories } from '../../core/repositories';
 import { ApprovalError, type ApprovalService } from '../../core/services/approval';
 import type { BlobStore } from '../../integrations/storage/blobs';
+import type { SandboxDeployer } from '../../integrations/cloudrun/sandbox';
+import { releaseSandbox, type SandboxCapacityService } from '../../core/services/sandboxCapacity';
+import type { SandboxLifecycleService } from '../../core/services/sandboxLifecycle';
 import { MAX_MEANINGFUL_AUTONOMOUS_ATTEMPTS } from '../../core/migration/problems';
 import { StaleProjectError } from '../../core/repositories/projects';
 import { ApiError } from '../errors';
@@ -35,6 +38,10 @@ export function registerMigrationRoutes(
   startMigration?: (projectId: string, migrationRunId: string) => void,
   /** Regenerates the evidence package. Injected for the same reason. */
   generateReport?: (projectId: string) => Promise<void>,
+  /** Sandbox capacity and lifecycle. Absent where hosting is not configured. */
+  capacity?: SandboxCapacityService,
+  lifecycle?: SandboxLifecycleService,
+  deployerFor?: (deployment: SandboxDeployment) => SandboxDeployer,
 ): void {
   app.get<{ Params: Params }>('/projects/:id/gates', async (req) => {
     await loadOwnedProject(repos, req, req.params.id);
@@ -216,6 +223,58 @@ export function registerMigrationRoutes(
     }
     await generateReport(req.params.id);
     return reply.status(202).send({ status: 'GENERATING' });
+  });
+
+  /**
+   * Extends the sandbox, and records that it was opened.
+   *
+   * The "inactivity" clock. Called by the completion screen when a user follows
+   * the link, so a sandbox under active review stays up and a forgotten one does
+   * not — without needing Cloud Monitoring to tell us about traffic.
+   */
+  app.post<{ Params: Params }>('/projects/:id/sandbox/extend', async (req) => {
+    await loadOwnedProject(repos, req, req.params.id);
+    if (!lifecycle) throw ApiError.badRequest('Sandbox lifecycle is not configured.');
+
+    const result = await lifecycle.extend(req.params.id);
+    if (!result) throw ApiError.notFound('Sandbox deployment');
+    return {
+      expiresAt: result.deployment.expiresAt,
+      hardExpiresAt: result.deployment.hardExpiresAt,
+      extended: result.extended,
+      // Said plainly rather than silently capping: a user who keeps clicking
+      // extend deserves to know the ceiling exists.
+      atCeiling: result.atCeiling,
+    };
+  });
+
+  /** Tears down on demand — the way to free a slot without waiting for expiry. */
+  app.delete<{ Params: Params }>('/projects/:id/sandbox', async (req, reply) => {
+    await loadOwnedProject(repos, req, req.params.id);
+    if (!deployerFor) throw ApiError.badRequest('Sandbox hosting is not configured.');
+
+    const rows = await repos.sandboxDeployments.collection
+      .find({ projectId: req.params.id } as never).sort({ createdAt: -1 }).limit(1).toArray();
+    const deployment = rows[0] as SandboxDeployment | undefined;
+    if (!deployment || deployment.status === 'TORN_DOWN') {
+      throw ApiError.notFound('Sandbox deployment');
+    }
+
+    await releaseSandbox(repos, deployerFor(deployment), deployment, 'REQUESTED');
+    return reply.status(204).send();
+  });
+
+  /**
+   * What is used and what is free.
+   *
+   * So the screen can say a sandbox will not be retained *before* someone starts
+   * a migration rather than after — capacity is not a failure, but it is a
+   * surprise if the first mention of it is in the report.
+   */
+  app.get('/sandbox/capacity', async (req) => {
+    if (!capacity) return { configured: false };
+    const state = await capacity.state(currentUser(req).uid);
+    return { configured: true, ...state };
   });
 
   app.post<{ Params: Params }>('/projects/:id/migration/approve', async (req, reply) => {

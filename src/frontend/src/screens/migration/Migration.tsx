@@ -9,8 +9,8 @@ import { useAuth } from '../../app/AuthContext';
 import { useProjectStream } from '../../hooks/useProjectStream';
 import {
   CLASSIFICATION_COLOR, DISPOSITION_COLOR, STATUS_COLOR, branchMeta, checkRows,
-  checklist, migrationStats, openProblems, rail, retryDisplay, sandboxCard, shortSha,
-  summarise, verdictLine, type ProblemSummary,
+  checklist, groupSummaries, migrationStats, openProblems, progressFromEvents, rail,
+  retryDisplay, sandboxCard, shortSha, summarise, verdictLine, type ProblemSummary,
 } from '../../lib/migration';
 
 /**
@@ -97,6 +97,10 @@ export function Migration() {
   const unresolved = openProblems(problems);
   const rows = verification ? checkRows(verification.checks) : [];
   const card = sandboxCard(sandbox);
+  // Rebuilt from the events themselves, so a refresh mid-build restores the
+  // same picture rather than an empty panel.
+  const progress = progressFromEvents(events);
+  const groups = groupSummaries(progress.suites);
 
   return (
     <div className="migration">
@@ -140,6 +144,64 @@ export function Migration() {
 
         <div className="mig-body">
           <section className="mig-feed">
+            {groups.length > 0 && (
+              <div className="test-progress">
+                <div className="test-progress-head">
+                  <span className="mono panel-label acc">
+                    {progress.phase ?? 'RUNNING TESTS'}
+                  </span>
+                  {/* The denominator comes from the baseline; the first run of a
+                      repository has none and says so rather than showing a bar
+                      that cannot fill. */}
+                  <span className="mono test-progress-count">{progress.counted}</span>
+                </div>
+                {groups.map((g) => (
+                  <div key={g.group} className="test-group">
+                    <div className="test-group-head">
+                      <span className="test-group-label">{g.label}</span>
+                      <span className="mono test-group-count">
+                        {g.finished} / {g.total} suites
+                      </span>
+                    </div>
+                    <div className="test-bar">
+                      <div
+                        className="test-bar-fill"
+                        style={{
+                          width: `${g.fraction * 100}%`,
+                          background: g.failed ? 'var(--bad)' : 'var(--ok)',
+                        }}
+                      />
+                    </div>
+                    {g.suites.map((suite) => (
+                      <div key={suite.suite} className={`suite ${suite.state.toLowerCase()}`}>
+                        <span className="mono suite-mark">
+                          {suite.state === 'PASSED' ? '✓'
+                            : suite.state === 'FAILED' ? '✗' : '▸'}
+                        </span>
+                        <span className="suite-name">{suite.short}</span>
+                        <span className="mono suite-meta">
+                          {suite.state === 'RUNNING'
+                            ? 'running…'
+                            : `${suite.total ?? 0} tests`
+                              + (suite.seconds !== undefined ? ` · ${suite.seconds}s` : '')}
+                        </span>
+                        {/* Surefire names failing methods individually and
+                            passing ones only as a count — the right asymmetry
+                            for a feed, and the reason this is worth rendering. */}
+                        {suite.failed.map((f) => (
+                          <div key={f.method} className="suite-failure">
+                            <div className="mono suite-failure-method">{f.method}</div>
+                            {f.message && (
+                              <div className="mono suite-failure-message">{f.message}</div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
             <ActivityFeed events={events} level={level} onLevel={setLevel} status={status} />
           </section>
 

@@ -213,6 +213,34 @@ export class ApiClient {
       `/projects/${projectId}/verification`,
     );
 
+  /**
+   * Extends the sandbox and records that it was opened.
+   *
+   * Called when a user follows the link, which is the "inactivity" clock: a
+   * sandbox under review stays up, a forgotten one does not.
+   */
+  extendSandbox = (projectId: string) =>
+    this.request<{
+      expiresAt: string; hardExpiresAt?: string; extended: boolean; atCeiling: boolean;
+    }>(`/projects/${projectId}/sandbox/extend`, { method: 'POST', body: '{}' });
+
+  /** Frees a slot without waiting for expiry. */
+  tearDownSandbox = async (projectId: string): Promise<void> => {
+    const token = await this.token();
+    await fetch(`${this.baseUrl}/projects/${projectId}/sandbox`, {
+      method: 'DELETE',
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+  };
+
+  /** What is used and what is free, so the screen can say so before a run. */
+  sandboxCapacity = () =>
+    this.request<{
+      configured: boolean; perUserUsed?: number; perUserLimit?: number;
+      totalUsed?: number; totalLimit?: number; canRetain?: boolean;
+      boundBy?: 'USER' | 'PLATFORM'; ownProjects?: string[]; nextExpiryAt?: string;
+    }>('/sandbox/capacity');
+
   /** Carried forward from the assessment; the completion screen re-reads them. */
   recommendations = (projectId: string) =>
     this.request<{ count: number; recommendations: Recommendation[] }>(

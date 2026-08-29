@@ -50,6 +50,18 @@ export interface SandboxDeployer {
   readonly region: string;
   buildImage(spec: ImageSpec): Promise<BuiltImage>;
   deploy(spec: DeploySpec): Promise<Deployed>;
+  /**
+   * Removes a deployment by name, and the image behind it.
+   *
+   * On the interface rather than only on the `Deployed` handle, because teardown
+   * mostly happens later and elsewhere: a sweep reclaiming an expired sandbox has
+   * a name from a document, not a handle from the run that created it.
+   *
+   * Deleting the image matters more than deleting the service. Cloud Run scales
+   * to zero, so a stopped service costs nothing; the image in Artifact Registry
+   * is the part that persists and accrues.
+   */
+  teardown(input: { serviceName: string; imageUri?: string }): Promise<void>;
 }
 
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
@@ -84,6 +96,12 @@ export class LocalDockerDeployer implements SandboxDeployer {
     const port = this.hostPort || (await freePort());
     const env = Object.entries(spec.env ?? {}).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
 
+    // A rerun of the same project replaces its container rather than colliding
+    // with it. `docker run --name` refuses a name already in use, so without
+    // this the SECOND migration of a project fails to deploy — which is exactly
+    // the case that must replace (FR-9).
+    await run('docker', ['rm', '-f', spec.serviceName]).catch(() => undefined);
+
     const { stdout } = await run('docker', [
       'run', '--rm', '--detach',
       '--name', spec.serviceName,
@@ -100,6 +118,13 @@ export class LocalDockerDeployer implements SandboxDeployer {
         await run('docker', ['rm', '-f', spec.serviceName]).catch(() => undefined);
       },
     };
+  }
+
+  async teardown(input: { serviceName: string; imageUri?: string }): Promise<void> {
+    await run('docker', ['rm', '-f', input.serviceName]).catch(() => undefined);
+    if (input.imageUri) {
+      await run('docker', ['rmi', '-f', input.imageUri]).catch(() => undefined);
+    }
   }
 }
 
@@ -134,7 +159,18 @@ export class ScriptedDeployer implements SandboxDeployer {
   async deploy(spec: DeploySpec): Promise<Deployed> {
     this.deployed.push(spec);
     if (this.failures.deploy) throw new Error(this.failures.deploy);
-    return { url: this.url, revision: 'scripted-0001', dispose: async () => undefined };
+    return {
+      url: this.url,
+      revision: 'scripted-0001',
+      dispose: async () => { this.disposed.push(spec.serviceName); },
+    };
+  }
+
+  readonly disposed: string[] = [];
+  readonly tornDown: Array<{ serviceName: string; imageUri?: string }> = [];
+
+  async teardown(input: { serviceName: string; imageUri?: string }): Promise<void> {
+    this.tornDown.push(input);
   }
 }
 

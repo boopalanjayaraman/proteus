@@ -477,3 +477,191 @@ export const OUTCOME_COLOR: Record<string, string> = {
   PARTIALLY_MIGRATED: 'var(--warn)',
   HUMAN_ACTION_REQUIRED: 'var(--bad)',
 };
+
+// ---------------------------------------------------------------------------
+// Live test progress (PRD-16 §17)
+// ---------------------------------------------------------------------------
+
+export type ProgressGroup = 'MIGRATION_TARGET' | 'NEW_EVIDENCE' | 'REGRESSION_SURFACE';
+
+export const GROUP_LABEL: Record<ProgressGroup, string> = {
+  MIGRATION_TARGET: 'Migration targets',
+  NEW_EVIDENCE: 'New evidence',
+  REGRESSION_SURFACE: 'Regression surface',
+};
+
+/** The order the questions are worth asking in. */
+export const GROUP_ORDER: ProgressGroup[] = [
+  'MIGRATION_TARGET', 'NEW_EVIDENCE', 'REGRESSION_SURFACE',
+];
+
+export interface SuiteRow {
+  suite: string;
+  short: string;
+  group: ProgressGroup;
+  state: 'RUNNING' | 'PASSED' | 'FAILED';
+  total?: number;
+  failures?: number;
+  seconds?: number;
+  failed: Array<{ method: string; message?: string; at?: string }>;
+}
+
+/**
+ * Rebuilds the run's progress from the events that carried it.
+ *
+ * The screen holds no state of its own for this. The events are already
+ * persisted and already replayed on reconnect, so a viewer who refreshes
+ * mid-build sees the same picture rather than an empty panel — the same property
+ * that makes every other live screen in this product survive a refresh.
+ */
+export function progressFromEvents(
+  events: Array<{ type: string; title: string; message?: string; level: string }>,
+): { phase?: string; suites: SuiteRow[]; testsFinished: number; counted?: string } {
+  const bySuite = new Map<string, SuiteRow>();
+  let phase: string | undefined;
+  let counted: string | undefined;
+  let lastFailed: SuiteRow | undefined;
+
+  for (const e of events) {
+    if (e.level !== 'DETAIL') continue;
+    if (e.type !== 'TEST_STARTED' && e.type !== 'TEST_FAILED') continue;
+
+    // Matched rather than split off the end: the count itself contains the
+    // separator, so splitting on it returns half the answer.
+    const match = /(\d+\/\d+ tests · \d+\/\d+ suites|\d+ suites so far)/
+      .exec(e.message ?? '');
+    if (match) counted = match[1];
+
+    if (/^(Compiling|Running unit tests|Running integration tests|Packaging|Preparing)/
+      .test(e.title)) {
+      phase = e.title;
+      continue;
+    }
+
+    // "✗ methodName" — a named failing method, attached to the suite above it.
+    if (e.title.startsWith('✗ ')) {
+      const method = e.title.slice(2);
+      const suite = [...bySuite.values()].find((s) => s.short === e.message?.split(' · ')[0]);
+      const row = suite ?? lastFailed;
+      if (row) {
+        row.failed.push({ method });
+        lastFailed = row;
+      }
+      continue;
+    }
+
+    // An assertion message with no suite of its own belongs to the last failure.
+    if (lastFailed && !e.title.includes(' — ') && /expected|Exception|Error/.test(e.title)) {
+      const entry = lastFailed.failed.at(-1);
+      if (entry && !entry.message) entry.message = e.title;
+      continue;
+    }
+
+    const [name, result] = e.title.split(' — ');
+    if (!name) continue;
+    const group = groupFromLabel(e.message?.split(' · ')[0]);
+    const row: SuiteRow = bySuite.get(name) ?? {
+      suite: name, short: name, group, state: 'RUNNING', failed: [],
+    };
+    row.group = group;
+    if (result) {
+      row.state = /failed/.test(result) ? 'FAILED' : 'PASSED';
+      row.total = Number(/(\d+)/.exec(result)?.[1] ?? 0);
+      const seconds = /([\d.]+)s/.exec(e.message ?? '');
+      if (seconds) row.seconds = Number(seconds[1]);
+      if (row.state === 'FAILED') lastFailed = row;
+    }
+    bySuite.set(name, row);
+  }
+
+  const suites = [...bySuite.values()];
+  return {
+    ...(phase ? { phase } : {}),
+    suites,
+    testsFinished: suites.reduce((n, s) => n + (s.total ?? 0), 0),
+    ...(counted ? { counted } : {}),
+  };
+}
+
+const groupFromLabel = (label?: string): ProgressGroup => {
+  const entry = (Object.entries(GROUP_LABEL) as Array<[ProgressGroup, string]>)
+    .find(([, l]) => l === label);
+  return entry?.[0] ?? 'REGRESSION_SURFACE';
+};
+
+export interface GroupSummary {
+  group: ProgressGroup;
+  label: string;
+  finished: number;
+  total: number;
+  fraction: number;
+  failed: boolean;
+  suites: SuiteRow[];
+}
+
+/** One bar per question, in the order a reader wants them answered. */
+export function groupSummaries(suites: SuiteRow[]): GroupSummary[] {
+  return GROUP_ORDER.map((group) => {
+    const own = suites.filter((s) => s.group === group);
+    const finished = own.filter((s) => s.state !== 'RUNNING').length;
+    return {
+      group,
+      label: GROUP_LABEL[group],
+      finished,
+      total: own.length,
+      fraction: own.length === 0 ? 0 : finished / own.length,
+      failed: own.some((s) => s.state === 'FAILED'),
+      suites: own,
+    };
+  // A group with nothing in it is not a group; showing an empty bar for
+  // "regression surface" on a repository with no other tests reads as a defect.
+  }).filter((g) => g.total > 0);
+}
+
+// ---------------------------------------------------------------------------
+// Sandbox capacity and expiry (PRD-16)
+// ---------------------------------------------------------------------------
+
+export interface CapacityState {
+  configured: boolean;
+  perUserUsed?: number;
+  perUserLimit?: number;
+  totalUsed?: number;
+  totalLimit?: number;
+  canRetain?: boolean;
+  boundBy?: 'USER' | 'PLATFORM';
+  ownProjects?: string[];
+  nextExpiryAt?: string;
+}
+
+/**
+ * What to tell someone before they start, not after.
+ *
+ * Capacity is not a failure — the migration still verifies — but it is a
+ * surprise if the first mention of it is in the report.
+ */
+export function capacityNotice(state: CapacityState): string | null {
+  if (!state.configured || state.canRetain !== false) return null;
+  if (state.boundBy === 'USER') {
+    return `You are hosting ${state.perUserUsed} of ${state.perUserLimit} sandboxes. `
+      + 'The next migration will still be verified end to end, but its sandbox will be '
+      + 'released straight afterwards. Tear one down below to keep the next link.';
+  }
+  return `The platform is hosting ${state.totalUsed} of ${state.totalLimit} sandboxes. `
+    + 'Your migration will still be verified end to end; its sandbox will be released '
+    + 'afterwards rather than kept'
+    + (state.nextExpiryAt
+      ? `. The earliest slot frees ${new Date(state.nextExpiryAt).toLocaleDateString()}.`
+      : '.');
+}
+
+/** "expires in 6 days" — or the plain truth when it already has. */
+export function expiryLabel(expiresAt: string | Date | undefined, now = Date.now()): string {
+  if (!expiresAt) return '';
+  const ms = new Date(expiresAt).getTime() - now;
+  if (ms <= 0) return 'EXPIRED · AWAITING RECLAIM';
+  const days = Math.floor(ms / 86_400_000);
+  if (days >= 1) return `EXPIRES IN ${days} DAY${days === 1 ? '' : 'S'}`;
+  const hours = Math.max(1, Math.round(ms / 3_600_000));
+  return `EXPIRES IN ${hours} HOUR${hours === 1 ? '' : 'S'}`;
+}

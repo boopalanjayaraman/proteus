@@ -1,6 +1,6 @@
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
 import type { Logger } from '../config/logger';
-import type { Project } from '@proteus/schema';
+import type { Project, SandboxDeployment } from '@proteus/schema';
 import type { Repositories } from '../core/repositories';
 import { installErrorHandler } from './errors';
 import { requireAuth, type TokenVerifier } from './middleware/auth';
@@ -12,6 +12,9 @@ import { registerGraphRoutes } from './routes/graph';
 import { registerMigrationRoutes } from './routes/migration';
 import { registerProjectRoutes } from './routes/projects';
 import type { ApprovalService } from '../core/services/approval';
+import type { SandboxCapacityService } from '../core/services/sandboxCapacity';
+import type { SandboxLifecycleService } from '../core/services/sandboxLifecycle';
+import type { SandboxDeployer } from '../integrations/cloudrun/sandbox';
 import type { AssessmentService } from '../core/services/assessment';
 import type { GraphService } from '../core/services/graph';
 import type { BlobStore } from '../integrations/storage/blobs';
@@ -34,6 +37,14 @@ export interface ServerOptions {
   startMigration?: (projectId: string, migrationRunId: string) => void;
   /** Regenerates the evidence package. PRD-14 supplies it. */
   generateReport?: (projectId: string) => Promise<void>;
+  /** Sandbox capacity, lifecycle and reclaim. PRD-16 supplies them. */
+  capacity?: SandboxCapacityService;
+  lifecycle?: SandboxLifecycleService;
+  deployerFor?: (deployment: SandboxDeployment) => SandboxDeployer;
+  sandboxSweep?: () => Promise<{
+    scanned: number; reclaimed: string[];
+    failed: Array<{ projectId: string; reason: string }>;
+  }>;
 }
 
 /**
@@ -63,7 +74,7 @@ export async function buildServer(opts: ServerOptions): Promise<FastifyInstance>
   await app.register(async (authed) => {
     authed.addHook('preHandler', requireAuth(opts.verifier));
     registerMeRoutes(authed, opts.repos);
-    registerMaintenanceRoutes(authed, opts.repos);
+    registerMaintenanceRoutes(authed, opts.repos, opts.sandboxSweep);
     registerProjectRoutes(authed, opts.repos, opts.projects, opts.startDiscovery);
     registerGraphRoutes(authed, opts.repos, opts.graph);
     registerAssessmentRoutes(
@@ -72,6 +83,7 @@ export async function buildServer(opts: ServerOptions): Promise<FastifyInstance>
     registerMigrationRoutes(
       authed, opts.repos, opts.approvals, opts.blobs,
       opts.startMigration, opts.generateReport,
+      opts.capacity, opts.lifecycle, opts.deployerFor,
     );
     registerEventRoutes(authed, opts.repos);
   });

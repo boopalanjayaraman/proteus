@@ -150,7 +150,19 @@ export async function probeStartup(
 export async function runScenarios(
   baseUrl: string,
   scenarios: Scenario[],
-  opts: { fetchImpl?: typeof fetch; baselineLatencyMs?: number } = {},
+  opts: {
+    fetchImpl?: typeof fetch;
+    baselineLatencyMs?: number;
+    /**
+     * Called as each scenario resolves.
+     *
+     * These are ours, not the repository's — we drive the loop and hold every
+     * verdict the moment it exists. Reporting only at the end threw away live
+     * detail we already had, on the one phase where a viewer is watching a real
+     * URL answer.
+     */
+    onScenario?: (result: ScenarioResult) => void | Promise<void>;
+  } = {},
 ): Promise<E2EOutcome> {
   const doFetch = opts.fetchImpl ?? fetch;
   const results: ScenarioResult[] = [];
@@ -171,10 +183,12 @@ export async function runScenarios(
       const latencyMs = Date.now() - started;
 
       if (res.status !== scenario.expectStatus) {
-        results.push({
+        const failed = {
           name: scenario.name, passed: false, latencyMs,
           detail: `expected ${scenario.expectStatus}, got ${res.status}`,
-        });
+        };
+        results.push(failed);
+        await opts.onScenario?.(failed);
         log.push(`FAIL ${scenario.method} ${scenario.path} → ${res.status}`);
         continue;
       }
@@ -182,23 +196,29 @@ export async function runScenarios(
       if (scenario.expectBody) {
         const body = await res.json().catch(() => null);
         const verdict = scenario.expectBody(body);
-        results.push({
+        const checked = {
           name: scenario.name, passed: verdict.ok, latencyMs, detail: verdict.detail,
-        });
+        };
+        results.push(checked);
+        await opts.onScenario?.(checked);
         log.push(`${verdict.ok ? 'PASS' : 'FAIL'} ${scenario.method} ${scenario.path} `
           + `→ ${res.status} · ${verdict.detail}`);
         continue;
       }
 
-      results.push({
+      const ok = {
         name: scenario.name, passed: true, latencyMs, detail: `${res.status} as expected`,
-      });
+      };
+      results.push(ok);
+      await opts.onScenario?.(ok);
       log.push(`PASS ${scenario.method} ${scenario.path} → ${res.status} (${latencyMs}ms)`);
     } catch (e) {
-      results.push({
+      const errored = {
         name: scenario.name, passed: false, latencyMs: Date.now() - started,
         detail: (e as Error).message,
-      });
+      };
+      results.push(errored);
+      await opts.onScenario?.(errored);
       log.push(`FAIL ${scenario.method} ${scenario.path} → ${(e as Error).message}`);
     }
   }

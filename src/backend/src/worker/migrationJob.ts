@@ -23,6 +23,8 @@ import type { BuildExecutor } from '../integrations/cloudbuild/executor';
 import { GitHubReader } from '../integrations/github/client';
 import { GitWriter, migrationBranchName } from '../integrations/github/writer';
 import type { SandboxDeployer } from '../integrations/cloudrun/sandbox';
+import type { SandboxCapacityService } from '../core/services/sandboxCapacity';
+import type { SandboxLifecycleService } from '../core/services/sandboxLifecycle';
 import { runVerification, type VerificationJobOutcome } from './verificationJob';
 import { runReport } from './reportJob';
 import { runMigrationLoop, type LoopOutcome } from './migrationLoop';
@@ -59,6 +61,9 @@ export interface MigrationJobDeps {
   fetchImpl?: typeof fetch;
   /** Deploys the verified build. PRD-13 supplies it. */
   deployer?: SandboxDeployer;
+  /** Sandbox capacity and lifecycle. Absent means unlimited — the local default. */
+  capacity?: SandboxCapacityService;
+  lifecycle?: SandboxLifecycleService;
   /** Absent to skip the narrative; the report renders without it. */
   reportModel?: ModelClient;
 }
@@ -366,6 +371,8 @@ export async function runTestEngineering(
           workdir: checkout.dir, commands,
           ...(deps.containerPort !== undefined ? { containerPort: deps.containerPort } : {}),
           ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+          ...(deps.capacity ? { capacity: deps.capacity } : {}),
+          ...(deps.lifecycle ? { lifecycle: deps.lifecycle } : {}),
         })
       : undefined;
 

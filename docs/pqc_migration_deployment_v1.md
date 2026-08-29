@@ -305,24 +305,79 @@ credentials cover local development; the attached service account covers Cloud R
 
 ## 8. Teardown
 
+The product reclaims its own sandboxes — `POST /maintenance/sandbox-sweep` deletes every
+service past its expiry **and the Artifact Registry image behind it**. Point Cloud
+Scheduler at it hourly:
+
 ```bash
-# Sandbox services expire after the demo window; sweep the leftovers.
+gcloud scheduler jobs create http proteus-sandbox-sweep \
+  --schedule="0 * * * *" --location="$REGION" \
+  --uri="https://$API_HOST/maintenance/sandbox-sweep" --http-method=POST \
+  --oidc-service-account-email="proteus-api@$PROJECT.iam.gserviceaccount.com"
+
+gcloud scheduler jobs create http proteus-rotation-sweep \
+  --schedule="0 9 * * 1" --location="$REGION" \
+  --uri="https://$API_HOST/maintenance/rotation-sweep" --http-method=POST \
+  --oidc-service-account-email="proteus-api@$PROJECT.iam.gserviceaccount.com"
+```
+
+Deleting the image is the half that matters. Cloud Run scales to zero, so a stopped
+service was already free; the Artifact Registry storage is the part that accrues, and a
+sweep that deleted only services would reclaim nothing.
+
+A cleanup policy on the repository is the backstop for anything the sweep misses:
+
+```bash
+gcloud artifacts repositories set-cleanup-policies proteus-sandbox \
+  --location="$REGION" --policy=- <<'JSON'
+[{"name":"expire-old","action":{"type":"Delete"},
+  "condition":{"olderThan":"2592000s","tagState":"ANY"}}]
+JSON
+```
+
+The manual sweeps remain, for a project being decommissioned:
+
+```bash
 gcloud run services list --region="$REGION" --format='value(name)' \
-  | grep '^pqc-sandbox-' | xargs -r -n1 gcloud run services delete --region="$REGION" --quiet
+  | grep '^proteus-sandbox-' | xargs -r -n1 gcloud run services delete --region="$REGION" --quiet
 
 # Per-project secrets outlive their projects only by mistake.
 gcloud secrets list --format='value(name)' | grep '^proteus-PQC-' \
   | xargs -r -n1 gcloud secrets delete --quiet
 ```
 
-Both sweeps exist because both leave something live behind: a running service that is
-not production but looks like it, and a credential with nothing watching it.
+All of them exist because each leaves something live behind: a running service that is
+not production but looks like it, an image nobody is paying attention to, and a
+credential with nothing watching it.
 
 ---
 
 ## 9. Cost notes for a prototype
 
-Cloud Run `min-instances=1` is the only always-on cost and is required for SSE. Cloud
-Build bills per build-minute — the migration loop is the driver, and the four-attempt
-retry budget bounds it. Atlas M0 and Secret Manager at this volume are free. Sandbox
-services should carry an expiry rather than running indefinitely.
+**The Proteus API is the only always-on cost.** `min-instances=1` is required for SSE, and
+it is the one service billed while idle.
+
+**Sandboxes are not.** Every sandbox runs with `min-instances=0` and `cpuIdle: true`, so
+CPU and memory are billed only while a request is being served. Thirty idle sandboxes cost
+nothing, and the free tier — 2M requests, 180,000 vCPU-seconds, 360,000 GiB-seconds per
+billing account per month — is far beyond a demo. `min-instances` is deliberately not
+configurable for sandboxes; it is the single setting that makes this true.
+
+**Artifact Registry is the real cost, and it is small.** Images persist while services do
+not. A Spring Boot image on a JRE base is roughly 300–400 MB, and layers shared inside one
+repository are not paid for twice. Storage runs about $0.10 per GB per month above a 0.5 GB
+free allowance, so thirty sandboxes is single-digit gigabytes — under a dollar a month.
+
+So the caps in `SANDBOX_MAX_PER_USER` and `SANDBOX_MAX_TOTAL` are not spend limits. They
+exist so a URL labelled *not production* does not stay live with nobody watching it, and so
+unreviewed third-party code has a bounded blast radius (D-020).
+
+**Cloud Build bills per build-minute.** The migration loop is the driver and the
+four-attempt retry budget bounds it. A cold Maven dependency tree costs 33 seconds on the
+reference fixture — measured — which is why the pipeline caches `.m2` to GCS keyed by a
+hash of the build manifest. Without that cache a five-execution run pays it five times.
+
+Atlas M0 and Secret Manager at this volume are free.
+
+> These figures are the right order of magnitude as of writing and are not a quote.
+> Confirm against the current pricing pages before running anything at scale.

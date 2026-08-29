@@ -6,8 +6,8 @@ import { useParams } from 'react-router-dom';
 import { useAuth } from '../../app/AuthContext';
 import { mix } from '../../lib/impact';
 import {
-  OUTCOME_COLOR, OUTCOME_LABEL, STATUS_COLOR, artifactCards, checkRows, outcomeTiles,
-  sandboxCard,
+  OUTCOME_COLOR, OUTCOME_LABEL, STATUS_COLOR, artifactCards, capacityNotice, checkRows,
+  expiryLabel, outcomeTiles, sandboxCard, type CapacityState,
 } from '../../lib/migration';
 
 /**
@@ -39,6 +39,8 @@ export function Completion() {
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [capacity, setCapacity] = useState<CapacityState>({ configured: false });
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -55,6 +57,7 @@ export function Completion() {
       api.artifacts(id).then((a) => setArtifacts(a.artifacts)).catch(() => undefined),
       api.recommendations(id).then((r) => setRecommendations(r.recommendations))
         .catch(() => undefined),
+      api.sandboxCapacity().then(setCapacity).catch(() => undefined),
     ]);
   }, [api, id]);
 
@@ -110,6 +113,10 @@ export function Completion() {
         </p>
       </header>
 
+      {(notice || capacityNotice(capacity)) && (
+        <div className="mono sandbox-notice">{notice ?? capacityNotice(capacity)}</div>
+      )}
+
       {card && (
         <section className="sandbox-bar">
           <div className="sandbox-bar-main">
@@ -120,11 +127,34 @@ export function Completion() {
                 </a>
               : <div className="mono panel-empty">{card.status.replace(/_/g, ' ')}</div>}
             {/* From `isProduction`, every time. */}
-            <div className="mono sandbox-label">{card.label}</div>
+            <div className="mono sandbox-label">
+              {card.label}
+              {sandbox?.expiresAt ? ` · ${expiryLabel(sandbox.expiresAt)}` : ''}
+            </div>
+            {sandbox?.placement === 'LOCAL' && (
+              <div className="mono sandbox-line">
+                Running locally — verified end to end, but this address is not reachable
+                from elsewhere.
+              </div>
+            )}
+            {sandbox?.tornDownReason === 'CAPACITY' && (
+              <div className="mono sandbox-line">
+                Released because the platform was at its retained-sandbox limit. The
+                migration was verified end to end before it was released.
+              </div>
+            )}
           </div>
           <div className="sandbox-bar-actions">
             {card.url && card.ready && (
-              <a className="primary compact" href={card.url} target="_blank" rel="noreferrer">
+              <a
+                className="primary compact"
+                href={card.url}
+                target="_blank"
+                rel="noreferrer"
+                // Opening it is the access that resets the clock. A sandbox
+                // under review stays up; a forgotten one does not.
+                onClick={() => { void api.extendSandbox(id!).catch(() => undefined); }}
+              >
                 Open sandbox app
               </a>
             )}
@@ -140,6 +170,41 @@ export function Completion() {
             >
               View git diff
             </button>
+            {card.ready && (
+              <button
+                className="ghost"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  const r = await api.extendSandbox(id!).catch(() => null);
+                  setNotice(r
+                    ? r.atCeiling
+                      // Said plainly rather than silently capping.
+                      ? 'At the maximum lifetime — this sandbox cannot be extended further.'
+                      : `Extended. ${expiryLabel(r.expiresAt).toLowerCase()}.`
+                    : 'Could not extend this sandbox.');
+                  await load();
+                  setBusy(false);
+                }}
+              >
+                Extend
+              </button>
+            )}
+            {card.ready && (
+              <button
+                className="ghost"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  await api.tearDownSandbox(id!).catch(() => undefined);
+                  setNotice('Sandbox torn down. The slot is free for another migration.');
+                  await load();
+                  setBusy(false);
+                }}
+              >
+                Tear down
+              </button>
+            )}
           </div>
         </section>
       )}

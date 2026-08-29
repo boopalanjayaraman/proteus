@@ -1,5 +1,7 @@
 import { fileURLToPath } from 'node:url';
-import { coreConfig, configuredFeatures, firebaseConfig, geminiConfig } from './config/env';
+import {
+  coreConfig, configuredFeatures, firebaseConfig, geminiConfig, hostingConfig,
+} from './config/env';
 import { createLogger } from './config/logger';
 import { buildServer } from './api/server';
 import { FirebaseTokenVerifier, type TokenVerifier } from './api/middleware/auth';
@@ -12,8 +14,12 @@ import { GraphService } from './core/services/graph';
 import { ProjectService } from './core/services/projects';
 import { GcpSecretVault } from './integrations/secrets/vault';
 import { GcsBlobStore } from './integrations/storage/blobs';
-import { ProcessExecutor } from './integrations/cloudbuild/executor';
+import {
+  assertRuntimeAvailable, buildExecutorFor, sandboxDeployerFor,
+} from './integrations/gcp/factory';
 import { LocalDockerDeployer } from './integrations/cloudrun/sandbox';
+import { SandboxCapacityService } from './core/services/sandboxCapacity';
+import { SandboxLifecycleService, sweepSandboxes } from './core/services/sandboxLifecycle';
 import { GitHubReader } from './integrations/github/client';
 import { gcpConfig } from './config/env';
 import { GeminiClient } from './agent/model';
@@ -58,6 +64,8 @@ async function main(): Promise<void> {
       indexes: `${indexes.created} across ${indexes.collections} collections`,
       changeStreams: changeStreamsAvailable(),
       features,
+      build: `${process.env.BUILD_EXECUTOR ?? 'LOCAL'}`,
+      sandbox: `${process.env.SANDBOX_PLACEMENT ?? 'LOCAL'}`,
     },
     'proteus starting',
   );
@@ -108,11 +116,55 @@ async function main(): Promise<void> {
   // The toolchain the repository under migration is built in. Configuring an
   // image runs the build inside it, which is how a Java 17 Maven build succeeds
   // on a host that has neither.
-  const executor = new ProcessExecutor(process.env.BUILD_IMAGE);
-  // Cloud Run is spec §36's target; the local Docker deployer builds the
-  // repository's own Dockerfile and starts the same image, so a startup failure
-  // caused by the migration surfaces the same way. Both satisfy one interface.
-  const deployer = new LocalDockerDeployer();
+  // Where the build runs and where the sandbox lives, from configuration. A
+  // Cloud Run container cannot start another container, so a hosted Proteus must
+  // use the GCP implementations for both — checked at boot rather than
+  // discovered at the first `mvn` invocation, forty minutes into a demo.
+  const hosting = hostingConfig();
+  const settings = {
+    buildExecutor: hosting.BUILD_EXECUTOR,
+    buildImage: hosting.BUILD_IMAGE,
+    ...(hosting.CLOUD_BUILD_CACHE_URI
+      ? { cloudBuildCacheUri: hosting.CLOUD_BUILD_CACHE_URI }
+      : {}),
+    sandboxPlacement: hosting.SANDBOX_PLACEMENT,
+    sandboxMaxInstances: hosting.SANDBOX_MAX_INSTANCES,
+    sandboxCpu: hosting.SANDBOX_CPU,
+    sandboxMemory: hosting.SANDBOX_MEMORY,
+    sandboxRequestTimeoutSeconds: hosting.SANDBOX_REQUEST_TIMEOUT_SECONDS,
+  };
+  const gcpSettings = () => ({
+    projectId: gcp.GCP_PROJECT_ID,
+    region: gcp.GCP_REGION,
+    bucket: gcp.GCS_BUCKET,
+    artifactRegistryRepo: gcp.ARTIFACT_REGISTRY_REPO,
+    ...(gcp.CLOUD_BUILD_SERVICE_ACCOUNT
+      ? { serviceAccount: gcp.CLOUD_BUILD_SERVICE_ACCOUNT }
+      : {}),
+  });
+
+  const runtime = await assertRuntimeAvailable(settings);
+  if (!runtime.ok) log.error(runtime.reason);
+
+  const executor = buildExecutorFor(settings, gcpSettings);
+  const deployer = sandboxDeployerFor(settings, gcpSettings);
+
+  // The caps bound what is RETAINED, never what is deployed (D-020): past a cap
+  // the sandbox is still built and exercised, then released, so the verdict is
+  // never degraded by how busy the platform is.
+  const capacity = new SandboxCapacityService(repos, {
+    perUser: hosting.SANDBOX_MAX_PER_USER,
+    total: hosting.SANDBOX_MAX_TOTAL,
+  });
+  const lifecycle = new SandboxLifecycleService(repos, {
+    ttlDays: hosting.SANDBOX_TTL_DAYS,
+    hardTtlDays: hosting.SANDBOX_HARD_TTL_DAYS,
+  });
+  // A LOCAL deployment recorded by another process has nothing here that can
+  // reclaim it, so the sweep marks it rather than retrying forever.
+  const deployerFor = (d: { placement?: string }) =>
+    d.placement === 'CLOUD_RUN' ? deployer : new LocalDockerDeployer();
+
   const github = new GitHubReader();
 
   const app = await buildServer({
@@ -126,6 +178,7 @@ async function main(): Promise<void> {
         if (!project || !run) return;
         await runTestEngineering(project, run, {
           repos, projects, engine, model, executor, deployer, blobs, github, logger: log,
+          capacity, lifecycle,
           // The report's narrative is one call over verified state. Same client;
           // named separately because it is a flow, not an agent.
           reportModel: model,
@@ -133,6 +186,8 @@ async function main(): Promise<void> {
       })().catch((e) => log.error({ err: e, projectId }, 'migration job crashed'));
     },
     regenerateAssessment: assess,
+    capacity, lifecycle, deployerFor,
+    sandboxSweep: () => sweepSandboxes(repos, lifecycle, deployerFor),
     generateReport: async (projectId) => {
       const project = await repos.projects.byId(projectId);
       const run = project?.current.migrationRunId

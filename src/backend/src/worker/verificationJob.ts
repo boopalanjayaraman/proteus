@@ -17,6 +17,8 @@ import type { RuleEngine } from '../core/rules/engine';
 import type { BuildExecutor } from '../integrations/cloudbuild/executor';
 import type { SandboxDeployer } from '../integrations/cloudrun/sandbox';
 import { sandboxServiceName } from '../integrations/cloudrun/sandbox';
+import { releaseSandbox, type SandboxCapacityService } from '../core/services/sandboxCapacity';
+import type { SandboxLifecycleService } from '../core/services/sandboxLifecycle';
 import type { BlobStore } from '../integrations/storage/blobs';
 import { probeStartup, runScenarios, SETTLEMENT_SCENARIOS } from '../verification/e2e';
 import { mayDeploy, verify, type VerificationOutcome } from '../verification/service';
@@ -47,6 +49,11 @@ export interface VerificationJobDeps {
   containerPort?: number;
   /** Injected so tests can point the probe and scenarios at a stub server. */
   fetchImpl?: typeof fetch;
+  /** Capacity and lifecycle. Absent means unlimited, which is the local default. */
+  capacity?: SandboxCapacityService;
+  lifecycle?: SandboxLifecycleService;
+  /** Emits one event per end-to-end scenario as it completes (FR-G). */
+  onScenario?: (scenario: { name: string; passed: boolean; detail: string }) => void;
   /** Produces the report and the evidence package. PRD-14 supplies it. */
   onVerified?: (run: MigrationRun) => void;
 }
@@ -385,8 +392,11 @@ async function deploySandbox(
     // A literal, so every surface that shows the URL labels it from the data
     // rather than from a caption someone could forget to write.
     isProduction: false,
+    placement: deployer.kind === 'CLOUD_RUN' ? 'CLOUD_RUN' : 'LOCAL',
     // Long enough for review, per spec §36, and recorded so a sweep can find it.
-    expiresAt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+    ...(deps.lifecycle
+      ? deps.lifecycle.windowFor(now)
+      : { expiresAt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000) }),
   };
   await repos.sandboxDeployments.insert(deployment);
 
@@ -465,6 +475,21 @@ async function deploySandbox(
     const e2eRun = await advance(repos, advanced, 'END_TO_END_VERIFYING');
     const scenarios = await runScenarios(deployed.url, SETTLEMENT_SCENARIOS, {
       ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+      // FR-G. `runScenarios` already executes them one at a time and already has
+      // each verdict; it simply reported once at the end. This is the phase a
+      // viewer is most engaged in — a real URL answering.
+      onScenario: async (s) => {
+        deps.onScenario?.(s);
+        await repos.events.emit(project.projectId, {
+          type: s.passed ? 'E2E_TEST_PASSED' : 'E2E_TEST_FAILED',
+          phase: 'SANDBOX', level: 'ACTIVITY',
+          severity: s.passed ? 'SUCCESS' : 'ERROR',
+          stage: 'END_TO_END_VERIFYING',
+          title: s.name,
+          message: s.detail,
+          actor: 'TOOL', refs: { sandboxDeploymentId },
+        });
+      },
     });
 
     const executionRunId = `exec_${run.migrationRunId}_e2e`;
@@ -515,8 +540,34 @@ async function deploySandbox(
       actor: 'TOOL', refs: { sandboxDeploymentId, executionRunId },
     });
     void e2eRun;
+
+    // D-020, and the whole reason the caps are on retention rather than on
+    // deployment. Everything above has happened: the image built, the service
+    // started, the scenarios ran. The verdict is complete. What capacity decides
+    // is only whether the link survives the next minute.
+    if (deps.capacity && deployment.placement === 'CLOUD_RUN') {
+      const state = await deps.capacity.reclaimThenCheck(
+        project.ownerId,
+        project.projectId,
+        (stale) => releaseSandbox(repos, deployer, stale, 'EXPIRED'),
+      );
+      if (!state.canRetain) {
+        await releaseSandbox(repos, deployer, deployment, 'CAPACITY');
+        return {
+          ...deployment,
+          status: 'TORN_DOWN' as const,
+          tornDownReason: 'CAPACITY' as const,
+        };
+      }
+    }
   } catch (e) {
     await set({ status: 'FAILED' });
+    // A container started before the failure must not be left running. Nothing
+    // called dispose before this, so every verified migration leaked one.
+    await deployer.teardown({
+      serviceName: deployment.service.name,
+      ...(deployment.imageUri ? { imageUri: deployment.imageUri } : {}),
+    }).catch(() => undefined);
     await repos.events.emit(project.projectId, {
       type: 'SANDBOX_DEPLOYMENT_READY', phase: 'SANDBOX', level: 'MILESTONE', severity: 'ERROR',
       stage: 'SANDBOX_DEPLOYING',

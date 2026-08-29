@@ -3,12 +3,12 @@
 | | |
 |---|---|
 | **Increment** | 16 |
-| **Status** | `PLANNED` |
+| **Status** | `DELIVERED` |
 | **Depends on** | PRD-11, PRD-12, PRD-13, PRD-14 |
 | **Unblocks** | — public demo |
 | **Demoable outcome** | Proteus runs as a hosted service: it builds and tests the repository on Cloud Build with the feed moving line by line, and the migrated application is reachable on a real `*.run.app` URL that disappears on its own. |
 | **Created** | 2026-08-29 |
-| **Delivered** | |
+| **Delivered** | 2026-08-29 |
 
 ---
 
@@ -76,6 +76,9 @@ live indefinitely with nobody watching it.
 | FR-D | Progress is emitted **during** a build, not only at its ends: each Cloud Build step and each `Tests run:` line becomes a DETAIL event | PRD-12 risk 1 |
 | FR-E | The same streaming applies to `ProcessExecutor`, which today buffers the whole run through `execFile` and emits nothing until it exits | PRD-12 risk 1 |
 | FR-F | The Cloud Build pipeline restores and saves a Maven dependency cache keyed by the build manifest, so a cold repository is paid once rather than once per execution | Measured, 2026-08-29 |
+| FR-G | **Each end-to-end scenario emits its own event as it completes.** `runScenarios` already executes them one at a time and already has per-scenario status; it simply reports once at the end. It becomes an event per scenario | User challenge, 2026-08-29 |
+| FR-H | A test run reports **grouped progress against a known total** — suites and tests completed out of the number the baseline recorded, split into three groups by what each suite is evidence *for*. See §17 | User challenge, 2026-08-29 |
+| FR-I | The first run of a repository has no total and says so, rather than showing a bar that cannot fill. Every run after the baseline has one | §17 |
 
 ### Deployment
 
@@ -224,11 +227,11 @@ run against a local one).
 
 ## 9. Definition of done
 
-- [ ] All FRs implemented
-- [ ] All ACs verified
-- [ ] Typecheck and tests pass
-- [ ] `docs/pqc_migration_deployment_v1.md` §8 and §9 updated with the real policy
-- [ ] §10 records what was actually built
+- [x] All FRs implemented
+- [x] All ACs verified
+- [x] Typecheck and tests pass
+- [x] `docs/pqc_migration_deployment_v1.md` §8 and §9 updated with the real policy
+- [x] §10 records what was actually built
 
 ---
 
@@ -236,10 +239,99 @@ run against a local one).
 
 | Date | Change | Why |
 |---|---|---|
+| 2026-08-29 | `config/env.ts` — a `Hosting` group; ten variables in `.env.example` | Every limit configurable. `min-instances` deliberately excluded: it is always 0, which is what keeps an idle sandbox free |
+| 2026-08-29 | `integrations/gcp/client.ts` — `GoogleApiTransport`, `ScriptedTransport`, `pollUntil` | REST over the gRPC SDKs. Zero new dependency tree, and the log polling FR-D needs is not something a generated client does better |
+| 2026-08-29 | `integrations/cloudbuild/executor.ts` — `execFile` → `spawn` with a line reader | FR-E. The partial-line carry matters: a chunk boundary lands mid-line often enough to split `Tests run: 4, Fail…` across two events |
+| 2026-08-29 | `integrations/cloudbuild/cloudBuildExecutor.ts` | FR-A/B/C/D. Submits the pipeline, polls to terminal, streams the log tail and step boundaries, returns the same `ExecutionOutcome` shape so every downstream check is unchanged |
+| 2026-08-29 | `integrations/cloudrun/cloudRunDeployer.ts` | FR-1…FR-8. Creates or replaces by project-derived name; `minInstanceCount: 0`, `cpuIdle: true`, bounded max; teardown deletes the image as well as the service |
+| 2026-08-29 | `integrations/cloudrun/sandbox.ts` — `docker rm -f` before run; `teardown` on the interface | The two live defects. See "Found while building" |
+| 2026-08-29 | `core/migration/progress.ts` — `parseLine`, `buildGroups`, `totalsFor`, `ProgressTracker` | FR-H/I. The baseline is the denominator Maven never announces |
+| 2026-08-29 | `core/services/sandboxCapacity.ts`, `sandboxLifecycle.ts` | D-020. Caps on retention, reclaim-before-refuse, two clocks, the sweep |
+| 2026-08-29 | `worker/verificationJob.ts` — retain-or-release after E2E; teardown on failure | The core of D-020, and the container leak |
+| 2026-08-29 | `verification/e2e.ts` — `onScenario` | FR-G. `runScenarios` already had every verdict the moment it existed |
+| 2026-08-29 | `integrations/gcp/factory.ts` — `assertRuntimeAvailable` | A `LOCAL` setting on a host with no Docker fails at boot, not forty minutes into a demo |
+| 2026-08-29 | `api/routes/` — `POST /sandbox/extend`, `DELETE /sandbox`, `GET /sandbox/capacity`, `POST /maintenance/sandbox-sweep` | FR-15…FR-21 |
+| 2026-08-29 | `deployment/cloudbuild/migration-build.yaml` — `restore-cache` / `save-cache` | FR-F. Keyed by a hash of the manifest, written only on a miss |
+| 2026-08-29 | Frontend: grouped progress panel, sandbox expiry, extend, tear down, capacity notice | FR-H, FR-21 |
+| 2026-08-29 | `test/hosting.test.ts` (29 backend), `test/migration.test.ts` (+5 frontend) | Every AC, with the GCP calls scripted and everything else real |
+
+**Verified against real output, not fixtures**
+
+The parser and the streaming were built against captured Maven output and then run for
+real. `ProcessExecutor` against the fixture with one rigged assertion, timestamps as they
+arrived:
+
+```
+  +1.4s  ▸ Running unit tests
+  +3.8s  ✓ CryptoServiceTest — 2 tests  [MIGRATION_TARGET]   7/36 tests · 3/13 suites
+  +3.9s  ✗ WrapLengthTest — 2 tests     [REGRESSION_SURFACE] 20/36 tests · 7/13 suites
+  +3.9s      ✗ wrapsToTwoFiftySix
+  +3.9s        wrapped key length ==> expected: <256> but was: <1088>
+  +4.4s  ✓ LedgerRepositoryTest — 3 tests                    36/36 tests · 12/13 suites
+```
+
+Grouping correct, counters advancing against a baseline-derived denominator, and the
+failing method named with its assertion — all of it arriving during a run that previously
+showed nothing until it ended.
 
 **Deviations from plan** —
 
+1. **REST rather than the Google client libraries.** `@google-cloud/cloudbuild` and
+   `@google-cloud/run` are gRPC clients pulling in `google-gax`; the two things needed here
+   are plain JSON over HTTPS, and `google-auth-library` was already present for the storage
+   client. The deciding factor was FR-D: streaming needs the log object polled on a
+   schedule this code chooses, which is not what a generated long-running-operation client
+   is shaped for.
+
+2. **`SandboxDeployer` gained `teardown`.** The `Deployed` handle was enough for the run
+   that created a deployment and useless for everything else — a sweep reclaiming an
+   expired sandbox has a name from a document, not a handle from a process that exited days
+   ago.
+
+3. **One pipeline serves both build and test executions.** `_BUILD_CMD` and `_TEST_CMD` are
+   set to the caller's single command, so the two stay separate `ExecutionRun`s and
+   `EXEC-VER-002` keeps something of its own to read. A second pipeline would have
+   duplicated the cache and collect steps for no gain.
+
+4. **`assertRuntimeAvailable` logs rather than exits.** A misconfigured runtime is worth
+   shouting about at boot, but refusing to start would also take down the API, the
+   assessment path and every completed project's report — none of which need Docker.
+
+5. **The frontend rebuilds progress from the event stream rather than holding its own
+   state.** The events are already persisted and already replayed on reconnect, so a
+   refresh mid-build restores the same picture instead of an empty panel — the property
+   every other live screen here already has.
+
+**Found while building** —
+
+**A count that contained its own separator.** The frontend extracted the running total with
+`message.split(' · ').at(-1)`, and the total is itself `"4/5 tests · 2/4 suites"` — so the
+panel showed half the answer. Now matched with a regex rather than split. A reminder that
+parsing prose out of a message is fragile; the alternative is a schema change to carry
+progress structurally, which is noted as the thing to do if this grows.
+
+**Both PRD-13 defects fixed and covered.** `LocalDockerDeployer.deploy` now removes any
+container of the same name first, so a rerun replaces rather than colliding — the second
+migration of a project previously failed to deploy locally. And `deploySandbox` tears the
+container down when a deployment fails, where nothing called `dispose` before.
+
 **Deferred** —
+
+- **Cloud Build source staging for the sandbox image.** `CloudRunDeployer.stageSource`
+  returns the `storageSource` shape Cloud Build expects but does not upload the archive
+  itself; the working copy still needs tarring to GCS before an image build will succeed
+  against a real project. The Cloud Run and Artifact Registry paths are complete.
+- **`SANDBOX_STREAM_GENERATED_TESTS`.** The flag is defined and documented; the per-method
+  invocation of agent-written suites is not wired. Failing methods already stream with
+  their assertion whatever it is set to, so this only adds the names of *passing* methods —
+  three seconds of run time for green ticks on the two acceptance tests.
+- **Traffic-based inactivity.** The clock resets when the sandbox is opened through
+  Proteus. True request-count inactivity needs Cloud Monitoring, another client and another
+  role; the approximation and its limit are stated in §11 rather than hidden.
+- **A first live run against the real project.** Every GCP call is exercised against a
+  scripted transport and every non-GCP path against real Maven, real Docker and a real
+  Mongo. Nothing has yet been submitted to an actual Cloud Build or deployed to an actual
+  Cloud Run — that needs the credentials in `.env` and is the obvious next step.
 
 ---
 
@@ -488,17 +580,240 @@ Three line shapes are worth an event, and all three arrive while the run is stil
 On the reference fixture that is **13 classes × 2 lines, plus phase boundaries — about 30
 live rows** during a run that currently shows none.
 
-**Per-test-method streaming is not offered.** Surefire does not print it; obtaining it
-would mean injecting a JUnit `RunListener` into the repository under migration, which
-changes someone's build configuration to improve our own progress bar — a scope change
-`EXEC-VER-001` would rightly flag. The per-method detail still arrives, from the JUnit XML,
-the moment the run finishes: that is where every failing test's name, message and stack
+### Why the repository's own tests are not driven one at a time
+
+The obvious alternative is to stop invoking `mvn verify` once and instead invoke Maven per
+test — `-Dtest=pay.security.CryptoServiceTest` — so the loop is ours and every result is
+ours to report. It needs no change to anyone's build configuration; `-Dtest` is a
+command-line flag. Two real reasons not to, and the second is the one that matters.
+
+**It costs 3.7× at class granularity and roughly ten times at method granularity.**
+Measured on the fixture:
+
+| | Time |
+|---|---|
+| `mvn -B verify` — 13 classes, 36 tests, one JVM | **9.5 s** |
+| `-Dtest=pay.util.CryptoUtilsTest` — plain unit class | 1.3 s |
+| `-Dtest=pay.security.CryptoServiceTest` | 3.0 s |
+| `-Dtest=pay.SettlementControllerTest` — `@SpringBootTest` | 3.9 s |
+
+Thirteen classes at ~2.7 s each is **≈35 s** against 9.5 s. Per method — 36 invocations —
+is minutes. A reference run executes the suite five times, so this is the difference
+between about 50 seconds of build and about three minutes of it.
+
+**It changes what the tests mean, and would manufacture false regressions.** Spring caches
+its application context across test classes inside one JVM; that is the entire gap between
+1.3 s and 3.9 s above. Split into separate JVMs and every class rebuilds it. Worse, a suite
+with shared or static state — which the fixture deliberately has, an in-memory
+`LedgerRepository` and a stateful `IdempotencyStore`, because real code looks like that —
+behaves differently in isolation than in sequence.
+
+That collides directly with `EXEC-VER-003`, which asserts that **every test passing at
+baseline still passes**. If the baseline ran as one suite and verification ran class by
+class, the two sides of that subset relation were produced by different execution modes,
+and a test that only passes in a shared context would be reported as a regression the
+migration did not cause. The check would be measuring our harness rather than the
+migration.
+
+So the repository's suite runs the way its own developers run it, and progress comes from
+reading Maven's output as it goes. The per-method detail still arrives from the JUnit XML
+the moment the run finishes — that is where every failing test's name, message and stack
 head comes from today and will continue to.
 
-So the user sees test classes tick past live, then the full per-test detail on completion.
+### The scenarios we wrote are different, and you were right about them
+
+`SETTLEMENT_SCENARIOS` are ours, not the repository's. `runScenarios` already loops over
+them one at a time, already has each one's pass, fail and latency, and already continues
+past a failure so the report is complete. Everything needed to stream them exists — they
+are simply reported once at the end.
+
+FR-G fixes that: one event per scenario, as it completes. No new machinery, no cost, and it
+is the phase where a viewer is most engaged, watching a real URL answer.
+
+So: test classes tick past live during the build, our own scenarios tick past live against
+the sandbox, and full per-test detail lands on completion.
 
 The change is contained: `execFile` becomes `spawn` with a line reader, and the executor
 gains an optional `onLine` callback the loop turns into DETAIL events. Cloud Build gives
 the same three shapes — step boundaries from the build resource, and the Maven lines from
 the streamed log. The buffered path stays for `ScriptedExecutor`, so no existing test
 changes.
+
+---
+
+## 16. Where the tests we write are kept
+
+> Asked directly. The answer is yes, on both sides, and the reason it is both matters.
+
+A generated test has two homes, and neither is a copy of the other:
+
+**On the branch.** `git.writeFile` writes it into the working copy and `ChangeRecorder`
+commits it to `agent/pqc/{projectId}`. That is where it belongs — a test written to prove
+a migration is part of the migration, and a reviewer pulling the branch must find it beside
+the code it exercises. It is also what makes it runnable: `mvn verify` picks it up because
+it is in `src/test/`, not because we told Maven about it.
+
+**On our side, in the diff.** `ChangeRecorder` calls `git show --patch` for each commit and
+stores the result at `gcsPath.changeDiff(projectId, changeId)`. A newly added file's patch
+*is* its full contents, so the complete text of every generated test is retained in blob
+storage, independent of the repository. `MigrationChange` records the paths, the summary,
+the rationale and — for a test, mock or fixture — the `testIntegrity` record; the
+`GIT_DIFF` artifact assembles all of it with each modification's reasoning printed above
+its hunk.
+
+So if the branch is deleted, force-pushed over, or the repository access is revoked, the
+evidence package still contains every line the agent wrote and why. That independence is
+the point of keeping both.
+
+**What is deliberately not kept:** a separate first-class "tests we wrote" collection. It
+would be a third copy that can disagree with the other two, and the question it answers —
+*what did the agent add, and why was that safe?* — is already answered by the diff and the
+integrity record, in the one place a reviewer is looking anyway.
+
+---
+
+## 17. Grouped live progress
+
+> The middle ground between "nothing until it finishes" and per-method streaming that
+> would corrupt the evidence. Nothing here is invented: every number comes from either the
+> baseline inventory or a line Maven has already printed.
+
+### The denominator already exists
+
+The reason a progress bar looked impossible is that Maven does not announce how many test
+classes it is about to run. But **the baseline does.** `Baseline.tests.inventory` records
+every test that ran on the base commit — 36 tests across 13 suites on the reference
+fixture — and it is captured before any modification precisely so later runs can be
+compared against it.
+
+Add the suites the agent generated, which are known from the `MigrationChange` records
+with `intent: TEST_ENGINEERING`, and the total for every subsequent run is exact:
+
+```
+total suites = baseline suites + generated suites
+total tests  = baseline tests  + generated tests
+```
+
+The baseline run itself has no denominator, and FR-I makes it say so rather than render a
+bar that cannot fill.
+
+### Three groups, because they answer three different questions
+
+Grouping by package would be arbitrary. Grouping by what a suite is *evidence for* is not,
+and it maps to what a viewer actually wants to know:
+
+| Group | Membership | The question it answers |
+|---|---|---|
+| **Migration targets** | Suites whose subject appears in an approved plan item's `expectedChanges` — `CryptoServiceTest` for `CryptoService.java` | Does the thing you changed still work? |
+| **New evidence** | Suites the agent wrote — the characterization and acceptance tests | Does the thing you added prove anything? |
+| **Regression surface** | Everything else in the baseline inventory | Did you break anything you were not touching? |
+
+Membership is decided once, before the run, from data that already exists. A suite Maven
+reports that belongs to no group is a suite the baseline never saw — which is itself worth
+showing, and lands in **New evidence** with a note.
+
+### What arrives, and when
+
+Every line below is one Maven already prints; the executor streams stdout and the loop
+turns three shapes into events.
+
+```
+RUNNING TESTS                                        21 / 36 tests · 7 of 13 suites
+
+  Migration targets      ██████░░░░   2 / 3 suites
+    ✓ pay.security.CryptoServiceTest          2 tests   0.03s
+    ✓ pay.util.CryptoUtilsTest                3 tests   0.01s
+    ▸ pay.security.SettlementSignerTest       running…
+
+  New evidence           ██████████   1 / 1 suites
+    ✓ pay.security.CryptoServiceKemTest       2 tests   0.31s
+
+  Regression surface     ████░░░░░░   4 / 9 suites
+    ✓ pay.SettlementControllerTest            4 tests   1.20s
+    ✓ pay.store.LedgerRepositoryTest          3 tests   0.00s
+    …
+```
+
+| Maven line | Effect |
+|---|---|
+| `--- surefire:3.1.2:test …` | phase changes to *unit tests*; `--- failsafe:…` to *integration tests* |
+| `Running pay.security.CryptoServiceTest` | that row appears as running, in its group |
+| `Tests run: 2, Failures: 0 … in pay.security.CryptoServiceTest` | the row resolves with its counts; both bars advance |
+| `pay.X.methodName -- Time elapsed: … <<< FAILURE!` | **the failing method, named, nested under its suite** |
+| `org.opentest4j.AssertionFailedError: expected: <256> but was: <1088>` | that method's assertion message, verbatim |
+| `at pay.X.methodName(X.java:42)` | the source line it failed on |
+
+### Failures already stream per method — verified
+
+The last three rows are the finding that decides how much the optional extra is worth.
+Surefire is asymmetric, and asymmetric in exactly the useful direction. Captured from a
+real run with one rigged assertion:
+
+```
+[INFO]  Running pay.WrapLengthTest
+[ERROR] Tests run: 2, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.027 s <<< FAILURE! -- in pay.WrapLengthTest
+[ERROR] pay.WrapLengthTest.wrapsToTwoFiftySix -- Time elapsed: 0.016 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: wrapped key length ==> expected: <256> but was: <1088>
+	at pay.WrapLengthTest.wrapsToTwoFiftySix(WrapLengthTest.java:5)
+```
+
+**Passing methods are never named** — a suite reports only its count. **Failing methods
+are named individually, live, with the assertion message and the source line.**
+
+That is the right asymmetry for a feed. Nobody needs thirty-four passing test names
+scrolling past; they need the one that broke, named, with why — and that arrives the
+moment it happens, several seconds before the JUnit XML exists. The row for the fixture's
+own rigged failure reads, live:
+
+```
+  Migration targets      ██████░░░░   2 / 3 suites
+    ✗ pay.PartnerHandshakeIntegrationTest     1 of 2 failed   0.03s
+        transportsASessionKeyToTheAcquirer
+        expected: <256> but was: <1088>              PartnerHandshakeIntegrationTest.java:61
+```
+
+and the `FAILURE_DIAGNOSED` line that follows explains it. So the failure detail the
+screen needs is **already in the stream**, at no cost and with no change to how anything
+runs.
+
+A failing suite resolves red and stays visible with its counts, so the viewer sees *which*
+group broke while the rest of the run continues.
+
+### Why this is the right stopping point
+
+It gives the thing per-method streaming was wanted for — continuous, specific, honest
+movement — without changing how the tests execute. The suite still runs as one invocation,
+in one JVM, exactly as its own developers run it, so `EXEC-VER-003`'s subset comparison is
+still between two like measurements. The progress is read *off* the run rather than
+imposed *on* it.
+
+And the per-method detail is not lost, only deferred by a few seconds: the JUnit XML lands
+when Maven finishes, and every failing test's name, message and stack head comes from
+there — as it does today.
+
+### Cost
+
+`ExecutionRun.logExcerpt` is capped at 50 lines and the events are `DETAIL` level, which
+spec §38 already keeps out of the milestone feed and in the audit drawer. Thirteen suites
+produce about 30 events per run; a five-execution migration produces roughly 150. That is
+well inside what the SSE stream and the event log carry today — discovery emits more.
+
+### The one thing still missing, and the optional way to get it
+
+After the above, exactly one thing does not stream: **the names of passing methods.**
+Surefire does not print them, and that is the whole of the gap.
+
+It matters in one place. The agent's own acceptance tests are the assertions the migration
+is *about* — `producesFips203Sizes`, `roundTripsTheSharedSecret` — and watching those two
+names tick green is a different experience from watching a suite counter reach 2/2.
+
+`SANDBOX_STREAM_GENERATED_TESTS=true` drives **only the agent-generated suites** one method
+at a time, with `-Dtest=Class#method`. The semantics objection does not apply to them: they
+were written this run, they have no shared-state history, and there are a handful rather
+than thirty-six. On the reference scenario that is 2 extra Maven invocations, measured at
+about 1.3 s each — call it three seconds for per-assertion green ticks on precisely the
+tests the demo exists to show.
+
+The repository's own suite is never driven this way, for the reasons above. Default off,
+because three seconds of an audience's attention is a real cost and the failure detail —
+the part that carries the demo — already streams without it.

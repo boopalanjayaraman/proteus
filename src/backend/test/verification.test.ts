@@ -221,6 +221,7 @@ const sandbox = (over: Partial<SandboxDeployment> = {}): SandboxDeployment => ({
     latencyDeltaMs: 4.1,
   },
   isProduction: false,
+  placement: 'CLOUD_RUN',
   ...over,
 });
 

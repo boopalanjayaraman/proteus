@@ -82,6 +82,7 @@ export class BaselineService {
     run: MigrationRun,
     kind: ExecutionKind,
     command: string,
+    /** `onLine` passes through, so a caller can watch the run as it happens. */
     spec: Omit<ExecutionSpec, 'command' | 'commitSha'>,
   ): Promise<{ execution: ExecutionRun; inventory: TestInventory }> {
     const executionRunId = `exec_${run.migrationRunId}_${kind.toLowerCase()}_${Date.now().toString(36)}`;
