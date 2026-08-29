@@ -100,3 +100,29 @@ describe('redaction runs at the write boundary', () => {
     );
   });
 });
+
+describe('redaction preserves values it must not rebuild', () => {
+  // Regression: redactTokens rebuilt every object via Object.entries(), which
+  // turns a Date into {} because a Date has no enumerable own properties. Since
+  // redaction runs on every write, that corrupted every timestamp in the
+  // database — silently, because nothing throws.
+  it('leaves a Date a Date', () => {
+    const at = new Date('2026-08-29T10:00:00Z');
+    const out = redactTokens({ storedAt: at, nested: { rotationDueAt: at } });
+    expect(out.storedAt).toBeInstanceOf(Date);
+    expect(out.storedAt.toISOString()).toBe('2026-08-29T10:00:00.000Z');
+    expect(out.nested.rotationDueAt).toBeInstanceOf(Date);
+  });
+
+  it('leaves a Buffer a Buffer', () => {
+    const out = redactTokens({ data: Buffer.from('spec') });
+    expect(Buffer.isBuffer(out.data)).toBe(true);
+    expect(out.data.toString()).toBe('spec');
+  });
+
+  it('still redacts inside a plain object beside them', () => {
+    const out = redactTokens({ at: new Date(0), note: `use ${TOKEN} here` });
+    expect(out.at).toBeInstanceOf(Date);
+    expect(out.note).toBe('use [REDACTED] here');
+  });
+});

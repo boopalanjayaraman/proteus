@@ -12,6 +12,8 @@
     "build": "tsc -p tsconfig.json --noEmit false --outDir dist"
   },
   "dependencies": {
+    "@google-cloud/secret-manager": "^7.0.0",
+    "@google-cloud/storage": "^7.22.0",
     "@proteus/schema": "*",
     "fastify": "^5.12.1",
     "firebase-admin": "^14.3.0",

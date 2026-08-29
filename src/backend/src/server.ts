@@ -5,6 +5,10 @@ import { FirebaseTokenVerifier, type TokenVerifier } from './api/middleware/auth
 import { changeStreamsAvailable, connect, disconnect, redactUri } from './core/db/client';
 import { ensureIndexes } from './core/db/indexes';
 import { Repositories } from './core/repositories';
+import { ProjectService } from './core/services/projects';
+import { GcpSecretVault } from './integrations/secrets/vault';
+import { GcsBlobStore } from './integrations/storage/blobs';
+import { gcpConfig } from './config/env';
 
 /**
  * Process entry point.
@@ -51,7 +55,14 @@ async function main(): Promise<void> {
     throw e;
   }
 
-  const app = await buildServer({ repos, verifier, logger: log });
+  const gcp = gcpConfig();
+  const projects = new ProjectService(
+    repos,
+    new GcpSecretVault(gcp.GCP_PROJECT_ID),
+    new GcsBlobStore(gcp.GCS_BUCKET),
+  );
+
+  const app = await buildServer({ repos, projects, verifier, logger: log });
   await app.listen({ port: core.PORT, host: '0.0.0.0' });
   log.info(`listening on :${core.PORT}`);
 

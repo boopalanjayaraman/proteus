@@ -48,7 +48,8 @@ migration loop cannot be built before the plan it executes exists.
 | 02 | `DELIVERED` — 2026-08-29, 17 acceptance tests on a real replica set |
 | 03 | `DELIVERED` — 2026-08-29, 19 acceptance tests on a real server |
 | 04 | `DELIVERED` — 2026-08-29, 12 acceptance tests; shell renders and builds |
-| 05–14 | `PLANNED` |
+| 05 | `DELIVERED` — 2026-08-29, 18 acceptance tests; landing and create screens |
+| 06–14 | `PLANNED` |
 
 ## Conventions
 

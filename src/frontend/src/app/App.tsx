@@ -3,7 +3,9 @@ import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { Header } from '../components/layout/Header';
 import { Nav } from '../components/layout/Nav';
+import { CreateProject } from '../screens/CreateProject';
 import { Login } from '../screens/Login';
+import { Projects } from '../screens/Projects';
 import { Placeholder } from '../screens/Placeholder';
 import { useAuth } from './AuthContext';
 
@@ -47,8 +49,8 @@ function Shell() {
         <Nav project={project} />
         <main className="main">
           <Routes>
-            <Route path="/projects" element={<Placeholder title="Migration projects" prd="PRD-05" />} />
-            <Route path="/projects/new" element={<Placeholder title="Create migration project" prd="PRD-05" />} />
+            <Route path="/projects" element={<Projects />} />
+            <Route path="/projects/new" element={<CreateProject />} />
             <Route path="/projects/:id/discovery" element={<Placeholder title="Live discovery & dependency mapping" prd="PRD-07 · PRD-08" />} />
             <Route path="/projects/:id/assessment" element={<Placeholder title="Assessment & migration decision" prd="PRD-09 · PRD-10" />} />
             <Route path="/projects/:id/migration" element={<Placeholder title="Live autonomous migration" prd="PRD-11 · PRD-12" />} />

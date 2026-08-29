@@ -3,6 +3,9 @@ import pino from 'pino';
 import { buildServer } from '../../src/api/server';
 import type { AuthenticatedUser, TokenVerifier } from '../../src/api/middleware/auth';
 import type { Repositories } from '../../src/core/repositories';
+import { ProjectService } from '../../src/core/services/projects';
+import { InMemorySecretVault } from '../../src/integrations/secrets/vault';
+import { InMemoryBlobStore } from '../../src/integrations/storage/blobs';
 
 /**
  * A real server on a real port.
@@ -23,12 +26,21 @@ export class StubVerifier implements TokenVerifier {
 export interface TestServer {
   url: string;
   app: FastifyInstance;
+  /** Exposed so a test can assert what actually reached the vault and the bucket. */
+  vault: InMemorySecretVault;
+  blobs: InMemoryBlobStore;
+  projects: ProjectService;
   stop: () => Promise<void>;
 }
 
 export async function startTestServer(repos: Repositories): Promise<TestServer> {
+  const vault = new InMemorySecretVault();
+  const blobs = new InMemoryBlobStore();
+  const projects = new ProjectService(repos, vault, blobs);
+
   const app = await buildServer({
     repos,
+    projects,
     verifier: new StubVerifier(),
     logger: pino({ level: 'silent' }),
   });
@@ -37,7 +49,7 @@ export async function startTestServer(repos: Repositories): Promise<TestServer> 
   const port = typeof addr === 'object' && addr ? addr.port : 0;
   return {
     url: `http://127.0.0.1:${port}`,
-    app,
+    app, vault, blobs, projects,
     stop: () => app.close(),
   };
 }

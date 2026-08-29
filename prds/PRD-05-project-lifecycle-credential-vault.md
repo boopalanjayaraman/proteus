@@ -3,12 +3,12 @@
 | | |
 |---|---|
 | **Increment** | 05 |
-| **Status** | `PLANNED` |
+| **Status** | `DELIVERED` |
 | **Depends on** | PRD-02, PRD-03, PRD-04 |
 | **Unblocks** | PRD-06 |
 | **Demoable outcome** | Create a project with a repository URL, a GitHub PAT and supporting documents; see it appear as a tile on the landing screen. |
 | **Created** | 2026-08-29 |
-| **Delivered** | |
+| **Delivered** | 2026-08-29 |
 
 ---
 
@@ -116,16 +116,48 @@ and the place where getting it wrong is least recoverable.
 
 ## 9. Definition of done
 
-- [ ] All FRs implemented
-- [ ] All ACs verified
-- [ ] Typecheck and tests pass
-- [ ] §10 records what was actually built
+- [x] All FRs implemented
+- [x] All ACs verified — 17 backend tests, 1 frontend
+- [x] Typecheck and tests pass (118 total)
+- [x] §10 records what was actually built
 
 ## 10. Delivery log
 
 | Date | Change | Why |
 |---|---|---|
+| 2026-08-29 | `integrations/secrets/vault.ts` | `SecretVault` interface, GCP and in-memory implementations |
+| 2026-08-29 | `integrations/storage/blobs.ts` | `BlobStore` interface, GCS and in-memory implementations |
+| 2026-08-29 | `core/services/projects.ts` | Creation, upload, deletion, the single credential read path |
+| 2026-08-29 | `api/routes/projects.ts` | CRUD, with the credential stripped from every response |
+| 2026-08-29 | `screens/{Projects,CreateProject}.tsx` | Landing tiles and the five-section create form |
+| 2026-08-29 | **Fixed `redactTokens` destroying every `Date`** | See below |
 
-**Deviations from plan** —
+**Deviations from plan**
 
-**Deferred** —
+- **A real bug, found by AC-3.** `redactTokens` rebuilt every object through
+  `Object.entries()`, and a `Date` has no enumerable own properties — so every date it
+  touched became `{}`. Since redaction runs on every write, **every timestamp written
+  since PRD-02 was corrupted**, silently, because nothing throws. PRD-02's tests missed
+  it by asserting only on strings and numbers. Fixed by recursing into plain objects
+  only; three regression tests cover Date, Buffer and the mixed case.
+- **Vault and blob store are interfaces with in-memory implementations.** Tests exercise
+  the real service and routes against fakes rather than mocking the service itself — the
+  point of AC-1 is that the token never reaches Mongo, and mocking the thing under test
+  would prove nothing.
+- **The project id is allocated before the secret is written**, because the secret name
+  contains it. If the project insert then fails, the secret is destroyed on a best-effort
+  basis, so the sweep in deployment §8 has less to do. Ordering per decision D-009.
+- **Required scopes are served by the API**, not hardcoded in the screen, so the form
+  cannot drift from what the backend actually expects.
+- **The token input is cleared immediately after a successful create.** It has been
+  vaulted; leaving it in a form field or a React state tree serves no purpose.
+- **A validation failure never echoes the token.** The 400 names the offending field and
+  nothing else — a validation error is not a reason to put a credential in a response.
+
+**Deferred**
+
+- Document text extraction is queued (`extraction.status: PENDING`) but not performed →
+  PRD-06.
+- Repository profile detection (`PUBLIC · JAVA 17 · MAVEN`) → PRD-06, which is the first
+  increment that clones.
+- Rotation sweep reads `rotationDueAt` but nothing schedules it → TD-017 / PRD-14.

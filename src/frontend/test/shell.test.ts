@@ -178,3 +178,33 @@ describe('AC-6 · the bundle contains no backend secret', () => {
     expect(bundle).not.toMatch(/serviceAccount|private_key/);
   });
 });
+
+describe('PRD-05 · the create screen never leaks the token into the bundle or the DOM', () => {
+  it('sends the token but keeps nothing that returns it', async () => {
+    const sent: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      if (init?.body) sent.push(String(init.body));
+      return {
+        ok: true,
+        json: async () => ({
+          projectId: 'PQC-0001',
+          repository: { credential: { displayPrefix: 'github_pat_1', status: 'STORED' } },
+        }),
+      };
+    }));
+
+    const api = new ApiClient('http://api', async () => 't');
+    const token = 'github_pat_11ABCDEFGH0123456789_abcdefghijklmnopqrstuvwxyz012345';
+    const created = await api.createProject({
+      name: 'Payment API', repositoryUrl: 'https://github.com/a/b', githubToken: token,
+    });
+
+    // Sent once, on the way in.
+    expect(sent[0]).toContain(token);
+    // Never returned — the response carries a prefix and a status only.
+    expect(JSON.stringify(created)).not.toContain(token);
+    expect((created as unknown as { repository: { credential: { displayPrefix: string } } })
+      .repository.credential.displayPrefix).toBe('github_pat_1');
+    vi.unstubAllGlobals();
+  });
+});

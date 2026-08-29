@@ -56,6 +56,29 @@ export class ApiClient {
 
   project = (projectId: string) => this.request<Project>(`/projects/${projectId}`);
 
+  /** The landing list. One call — `summary` is the tile, `rail` is derived server-side. */
+  projects = () =>
+    this.request<{
+      count: number;
+      awaitingApproval: number;
+      needsHumanAction: number;
+      projects: Array<Project & { rail: number }>;
+    }>('/projects');
+
+  requiredScopes = () => this.request<{ scopes: string[] }>('/projects/required-scopes');
+
+  /**
+   * Creates a project. The token is sent once and never comes back — the
+   * response carries only a display prefix and a status.
+   */
+  createProject = (body: {
+    name: string;
+    repositoryUrl: string;
+    githubToken: string;
+    instructions?: string;
+    files?: Array<{ kind: string; originalName: string; mimeType: string; contentBase64: string }>;
+  }) => this.request<Project>('/projects', { method: 'POST', body: JSON.stringify(body) });
+
   events = (projectId: string, opts: { fromSeq?: number; level?: string[] } = {}) => {
     const q = new URLSearchParams();
     if (opts.fromSeq !== undefined) q.set('fromSeq', String(opts.fromSeq));

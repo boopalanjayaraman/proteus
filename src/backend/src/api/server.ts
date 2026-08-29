@@ -6,9 +6,12 @@ import { requireAuth, type TokenVerifier } from './middleware/auth';
 import { registerEventRoutes } from './routes/events';
 import { registerHealthRoutes } from './routes/health';
 import { registerMeRoutes } from './routes/me';
+import { registerProjectRoutes } from './routes/projects';
+import type { ProjectService } from '../core/services/projects';
 
 export interface ServerOptions {
   repos: Repositories;
+  projects: ProjectService;
   verifier: TokenVerifier;
   logger: Logger;
 }
@@ -40,6 +43,7 @@ export async function buildServer(opts: ServerOptions): Promise<FastifyInstance>
   await app.register(async (authed) => {
     authed.addHook('preHandler', requireAuth(opts.verifier));
     registerMeRoutes(authed, opts.repos);
+    registerProjectRoutes(authed, opts.repos, opts.projects);
     registerEventRoutes(authed, opts.repos);
   });
 

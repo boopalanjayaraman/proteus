@@ -109,18 +109,35 @@ export const GITHUB_TOKEN_PATTERN =
   /\b(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})\b/g;
 
 /**
+ * True only for `{}` literals — not Date, Buffer, ObjectId, or any class instance.
+ *
+ * The distinction is load-bearing. `Object.entries(new Date())` returns `[]`,
+ * because a Date carries no enumerable own properties, so rebuilding one that
+ * way silently yields `{}` and destroys the value. Since redaction runs on every
+ * write, treating a Date as a plain object corrupts every timestamp in the
+ * database — and nothing throws.
+ */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object') return false;
+  const proto = Object.getPrototypeOf(value) as unknown;
+  return proto === Object.prototype || proto === null;
+}
+
+/**
  * Redacts anything token-shaped. Applied to every event message, agent action
  * payload and report body before persistence — design rule 8 is enforced at the
  * write boundary, not left to authors of log statements.
+ *
+ * Values that are not strings, arrays or plain objects pass through untouched.
  */
 export function redactTokens<T>(value: T): T {
   if (typeof value === 'string') {
     return value.replace(GITHUB_TOKEN_PATTERN, '[REDACTED]') as unknown as T;
   }
   if (Array.isArray(value)) return value.map(redactTokens) as unknown as T;
-  if (value && typeof value === 'object') {
+  if (isPlainObject(value)) {
     return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, redactTokens(v)]),
+      Object.entries(value).map(([k, v]) => [k, redactTokens(v)]),
     ) as T;
   }
   return value;
