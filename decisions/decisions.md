@@ -14,7 +14,7 @@ a mystery six weeks later, which is the thing this file exists to prevent.
 
 ## At a glance
 
-2 blocking · 13 open · 1 deferred · 3 accepted
+0 blocking · 13 open · 1 deferred · 5 accepted
 | ID      | Title                                                                      | Status        | Category       | Blocks                 |
 | ------- | -------------------------------------------------------------------------- | ------------- | -------------- | ---------------------- |
 | `D-001` | The demo repository does not exist                                         | `NEEDS_INPUT` | delivery       | PRD-06, PRD-11, PRD-13 |
@@ -59,7 +59,7 @@ decisions:
   - id: D-001
     title: The test fixture repository does not exist
     category: delivery
-    status: NEEDS_INPUT
+    status: ACCEPTED
     raised: 2026-08-29
     blocks: [PRD-06, PRD-11, PRD-13]
     context: >
@@ -88,14 +88,21 @@ decisions:
       that ordering slips, the demo repositories in D-019 will expose it immediately.
     impact_if_unresolved: >
       PRD-06 cannot start. Every downstream increment inherits the block.
-    comment: ""
-    decision: ""
-    decided_on: ""
+    comment: "Built and pushed to a standalone repo."
+    decision: >
+      Built as fixtures/payments-api and published to its own repository. 40 files,
+      20 main classes, 13 test classes, 34 unit and 2 integration tests, verified green in
+      maven:3.9-eclipse-temurin-17 and as a running container. Two failures are rigged —
+      both in PartnerHandshakeIntegrationTest, in separate methods so neither masks the
+      other — and about nine further details are placed to be found without failing
+      anything. Doubles as the primary demo repository. Nothing published mentions
+      Proteus, PQC or ML-KEM. PRD-06, PRD-11 and PRD-13 are unblocked.
+    decided_on: 2026-08-29
 
   - id: D-019
     title: Which real repositories are used for customer demos
     category: delivery
-    status: NEEDS_INPUT
+    status: ACCEPTED
     raised: 2026-08-29
     blocks: []
     context: >
@@ -126,9 +133,12 @@ decisions:
     impact_if_unresolved: >
       No effect on the build. Affects demo preparation and needs settling before the
       first customer showing, not before PRD-06.
-    comment: ""
-    decision: ""
-    decided_on: ""
+    comment: "Candidates listed in docs/demo_repos_github.md. Revisit the list if needed."
+    decision: >
+      Candidate repositories recorded in docs/demo_repos_github.md; the fixture leads the
+      on-rails demo and a real repository follows live. The list is expected to change and
+      is not a build dependency — no PRD is blocked on it.
+    decided_on: 2026-08-29
 
   - id: D-002
     title: Gemini model id is unconfirmed

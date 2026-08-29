@@ -45,7 +45,8 @@ migration loop cannot be built before the plan it executes exists.
 | PRD | Status |
 |---|---|
 | 01 | `DELIVERED` — written retroactively; the code exists and is tested |
-| 02–14 | `PLANNED` |
+| 02 | `DELIVERED` — 2026-08-29, 17 acceptance tests on a real replica set |
+| 03–14 | `PLANNED` |
 
 ## Conventions
 

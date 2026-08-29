@@ -3,7 +3,11 @@
 Open questions that need a call, in one place, so they can be reviewed periodically
 instead of being rediscovered in the middle of an increment.
 
-`decisions.md` is the list — YAML inside a fenced block, edited in place. Each entry carries a `comment` and `decision` field that
+Two files:
+
+- **`decisions.md`** — choices awaiting your input. YAML in a fenced block, edited in place.
+- **`tech-debt.md`** — choices already made that we would make differently with more time.
+  Recorded when incurred, reviewed when convenient. Each entry carries a `comment` and `decision` field that
 are yours to fill; everything above them is context I supply.
 
 ## Workflow

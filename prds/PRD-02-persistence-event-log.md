@@ -3,12 +3,12 @@
 | | |
 |---|---|
 | **Increment** | 02 |
-| **Status** | `PLANNED` |
+| **Status** | `DELIVERED` |
 | **Depends on** | — |
 | **Unblocks** | PRD-03, PRD-05 |
 | **Demoable outcome** | None — foundation. Verified by test: kill the process mid-write, restart, and no state or event ordering is lost. |
 | **Created** | 2026-08-29 |
-| **Delivered** | |
+| **Delivered** | 2026-08-29 |
 
 ---
 
@@ -99,16 +99,38 @@ correctly-behaved persistence layer.
 
 ## 9. Definition of done
 
-- [ ] All FRs implemented
-- [ ] All ACs verified
-- [ ] Typecheck and tests pass
-- [ ] §10 records what was actually built
+- [x] All FRs implemented
+- [x] All ACs verified — 17 tests against a real replica set
+- [x] Typecheck and tests pass (66 total)
+- [x] §10 records what was actually built
 
 ## 10. Delivery log
 
 | Date | Change | Why |
 |---|---|---|
+| 2026-08-29 | `core/db/{client,indexes,counters,lease}.ts` | Connection, index bootstrap, atomic sequences, single-writer leases |
+| 2026-08-29 | `core/repositories/{base,events,projects,index}.ts` | Typed collections; validation and redaction on every write |
+| 2026-08-29 | `test/helpers/mongo.ts` + `test/persistence.test.ts` | 17 acceptance tests on `MongoMemoryReplSet` |
 
-**Deviations from plan** —
+**Deviations from plan**
 
-**Deferred** —
+- **Change-stream support is probed by opening one**, not by reading `hello.setName`.
+  Some managed deployments support change streams without advertising a replica-set name,
+  so the field is not a reliable signal. The probe is the only honest test.
+- **Redaction lives in `Repository.prepare()`**, so it runs on every insert in every
+  collection rather than at each call site. Design rule 8 then cannot be forgotten by the
+  author of a log statement, which was the failure mode it exists to prevent.
+- **`setLastEventSeq` refuses to move backwards** (`{ lastEventSeq: { $lt: seq } }`). A
+  slow emitter writing late would otherwise rewind the resume cursor and make a client
+  replay events it had already rendered. Not in the plan; found while writing FR-10.
+- **A lost idempotency race burns its sequence number**, leaving a gap of one. The
+  alternative — returning the number to the counter — is not atomic, and a duplicate
+  milestone on the live feed is worse than a gap the client never notices.
+- **`Repository.patch()` redacts but does not schema-validate.** A partial cannot satisfy
+  a whole-document schema. Callers changing something structural read, amend and insert.
+
+**Deferred**
+
+- Repositories beyond `projects` and `events` are typed and registered but have no
+  bespoke methods yet; each increment adds what it needs.
+- Lease reaping has a query (`expired()`) but no scheduler — PRD-12 owns the worker.
