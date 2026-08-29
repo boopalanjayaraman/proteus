@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { MigrationStage, type Baseline, type BehavioralInvariant, type MigrationRun } from '@proteus/schema';
 import {
-  CHECK_LABEL, CHECK_ORDER, CLASSIFICATION_COLOR, MIGRATION_STAGES, STAGE_LABEL,
-  STATUS_COLOR, branchMeta, checkRows, checklist, migrationStats, openProblems, rail,
-  retryDisplay, sandboxCard, shortSha, summarise, verdictLine, type ProblemSummary,
+  ARTIFACT_ORDER, CHECK_LABEL, CHECK_ORDER, CLASSIFICATION_COLOR, MIGRATION_STAGES,
+  OUTCOME_COLOR, OUTCOME_LABEL, STAGE_LABEL, STATUS_COLOR, artifactCards, branchMeta,
+  checkRows, checklist, migrationStats, openProblems, outcomeTiles, rail, retryDisplay,
+  sandboxCard, shortSha, summarise, verdictLine, type ProblemSummary,
 } from '../src/lib/migration';
 
 /** PRD-11 — what the migration screen claims about progress and the contract. */
@@ -234,5 +235,82 @@ describe('AC-9 · the verification list and the sandbox card', () => {
     // never to be represented as production.
     expect(card.label).toBe('SANDBOX · NOT PRODUCTION');
     expect(sandboxCard(null)).toBeNull();
+  });
+});
+
+describe('AC-7, AC-2 · the completion screen', () => {
+  const autonomy = {
+    eligibleItems: 1, completedAutonomously: 1, completionPct: 100,
+    humanEngineeringActions: 0, approvals: 1,
+  };
+  const recs = [
+    { name: 'Luna Network HSM 7 · firmware 7.4.0', disposition: 'HARDWARE_REPLACEMENT' },
+    { name: 'Gateway-X200 · firmware 4.2.1', disposition: 'VENDOR_DECISION' },
+    { name: 'pay-api leaf certificate', disposition: 'FOLLOW_ON_WORKSTREAM' },
+  ];
+
+  it('reads 100%, zero human actions, one repair and three recommendations', () => {
+    const tiles = outcomeTiles({ autonomy, autonomousRepairs: 1, recommendations: recs });
+    expect(tiles.map((t) => t.value)).toEqual(['100%', '0', '1', '3']);
+    expect(tiles.map((t) => t.label)).toEqual([
+      'AUTONOMOUS COMPLETION', 'HUMAN ENGINEERING ACTIONS',
+      'AUTONOMOUS REPAIRS', 'RECOMMENDATIONS RAISED',
+    ]);
+    // A bare zero does not make the product's central claim; the note does.
+    expect(tiles[1]!.note).toBe('One approval at the assessment gate; no further intervention.');
+    expect(tiles[1]!.fg).toBe('var(--ok)');
+    // Named rather than counted — a reader needs to know which three.
+    expect(tiles[3]!.note).toContain('Luna Network HSM 7');
+    expect(tiles[3]!.note).toContain('Gateway-X200');
+  });
+
+  it('does not claim success when a human had to intervene', () => {
+    const tiles = outcomeTiles({
+      autonomy: { ...autonomy, completionPct: 50, completedAutonomously: 1, eligibleItems: 2,
+        humanEngineeringActions: 1 },
+      autonomousRepairs: 0, recommendations: [],
+    });
+    expect(tiles[0]!.value).toBe('50%');
+    expect(tiles[0]!.fg).toBe('var(--warn)');
+    expect(tiles[1]!.fg).toBe('var(--warn)');
+    expect(tiles[1]!.note).toMatch(/intervention was required/);
+  });
+
+  it('renders an em dash before a migration has run, not 0%', () => {
+    const tiles = outcomeTiles({
+      autonomy: { ...autonomy, completionPct: null, completedAutonomously: 0 },
+      autonomousRepairs: 0, recommendations: [],
+    });
+    expect(tiles[0]!.value).toBe('—');
+  });
+
+  it('orders the evidence package and offers only what is downloadable', () => {
+    const cards = artifactCards([
+      { artifactId: 'a1', kind: 'GIT_DIFF', title: 'Git diff',
+        displayMeta: '2 COMMITS · 2 FILES · +12 −5', format: 'DIFF', status: 'READY' },
+      { artifactId: 'a2', kind: 'MIGRATION_REPORT', title: 'Migration report',
+        displayMeta: '9 PAGES · FULL AUDIT TRAIL', format: 'MARKDOWN', status: 'READY' },
+      { artifactId: 'a3', kind: 'ASSESSMENT_REPORT', title: 'Assessment report v1',
+        displayMeta: '6 PAGES', format: 'MARKDOWN', status: 'READY' },
+      { artifactId: 'a4', kind: 'BUILD_TEST_EVIDENCE', title: 'Build & test evidence',
+        displayMeta: '6 EXECUTIONS · 3 ATTEMPTS', format: 'JSON', status: 'GENERATING' },
+    ]);
+    expect(cards.map((c) => c.title)).toEqual([
+      'Migration report', 'Assessment report v1', 'Git diff',
+    ]);
+    // A generating artifact would hand the reader a broken link.
+    expect(cards.map((c) => c.artifactId)).not.toContain('a4');
+    expect(cards[0]!.ext).toBe('MD');
+    expect(cards[2]!.ext).toBe('DIFF');
+    expect(ARTIFACT_ORDER).toHaveLength(4);
+  });
+
+  it('labels each of spec §40 three outcomes', () => {
+    for (const o of ['VERIFIED', 'PARTIALLY_MIGRATED', 'HUMAN_ACTION_REQUIRED']) {
+      expect(OUTCOME_LABEL[o]).toBeTruthy();
+      expect(OUTCOME_COLOR[o]).toBeTruthy();
+    }
+    expect(OUTCOME_COLOR.VERIFIED).toBe('var(--ok)');
+    expect(OUTCOME_COLOR.HUMAN_ACTION_REQUIRED).toBe('var(--bad)');
   });
 });

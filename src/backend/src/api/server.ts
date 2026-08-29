@@ -6,7 +6,7 @@ import { installErrorHandler } from './errors';
 import { requireAuth, type TokenVerifier } from './middleware/auth';
 import { registerEventRoutes } from './routes/events';
 import { registerHealthRoutes } from './routes/health';
-import { registerMeRoutes } from './routes/me';
+import { registerMaintenanceRoutes, registerMeRoutes } from './routes/me';
 import { registerAssessmentRoutes } from './routes/assessment';
 import { registerGraphRoutes } from './routes/graph';
 import { registerMigrationRoutes } from './routes/migration';
@@ -32,6 +32,8 @@ export interface ServerOptions {
   startDiscovery?: (project: Project) => void;
   /** Kicks off the migration once a human has approved it. PRD-11 supplies it. */
   startMigration?: (projectId: string, migrationRunId: string) => void;
+  /** Regenerates the evidence package. PRD-14 supplies it. */
+  generateReport?: (projectId: string) => Promise<void>;
 }
 
 /**
@@ -61,13 +63,15 @@ export async function buildServer(opts: ServerOptions): Promise<FastifyInstance>
   await app.register(async (authed) => {
     authed.addHook('preHandler', requireAuth(opts.verifier));
     registerMeRoutes(authed, opts.repos);
+    registerMaintenanceRoutes(authed, opts.repos);
     registerProjectRoutes(authed, opts.repos, opts.projects, opts.startDiscovery);
     registerGraphRoutes(authed, opts.repos, opts.graph);
     registerAssessmentRoutes(
       authed, opts.repos, opts.assessments, opts.blobs, opts.regenerateAssessment,
     );
     registerMigrationRoutes(
-      authed, opts.repos, opts.approvals, opts.blobs, opts.startMigration,
+      authed, opts.repos, opts.approvals, opts.blobs,
+      opts.startMigration, opts.generateReport,
     );
     registerEventRoutes(authed, opts.repos);
   });

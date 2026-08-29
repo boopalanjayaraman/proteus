@@ -356,3 +356,124 @@ export function sandboxCard(sandbox: {
     ready: sandbox.status === 'READY',
   };
 }
+
+// ---------------------------------------------------------------------------
+// Completion — Sandbox & Report (PRD-14)
+// ---------------------------------------------------------------------------
+
+export interface OutcomeTile {
+  value: string;
+  label: string;
+  note: string;
+  fg: string;
+}
+
+/**
+ * The four outcome tiles.
+ *
+ * Every value comes from `summary.autonomy`, which the loop and the verification
+ * wrote from data. The notes explain what each number means, because "0" under
+ * HUMAN ENGINEERING ACTIONS is the product's central claim and a bare zero does
+ * not make it.
+ */
+export function outcomeTiles(input: {
+  autonomy: {
+    eligibleItems: number; completedAutonomously: number; completionPct: number | null;
+    humanEngineeringActions: number; approvals: number;
+  };
+  autonomousRepairs: number;
+  recommendations: Array<{ name: string; disposition: string }>;
+  repairSummary?: string;
+}): OutcomeTile[] {
+  const a = input.autonomy;
+  const recs = input.recommendations;
+  return [
+    {
+      value: a.completionPct === null ? '—' : `${a.completionPct}%`,
+      label: 'AUTONOMOUS COMPLETION',
+      note: `${a.completedAutonomously} of ${a.eligibleItems} eligible migration`
+        + `${a.eligibleItems === 1 ? '' : 's'} completed from approved finding to `
+        + 'verified sandbox.',
+      fg: a.completionPct === 100 ? 'var(--ok)' : 'var(--warn)',
+    },
+    {
+      value: String(a.humanEngineeringActions),
+      label: 'HUMAN ENGINEERING ACTIONS',
+      note: a.humanEngineeringActions === 0
+        ? `${a.approvals === 1 ? 'One approval' : `${a.approvals} approvals`} at the `
+          + 'assessment gate; no further intervention.'
+        : 'Engineering intervention was required — see the report for what and why.',
+      fg: a.humanEngineeringActions === 0 ? 'var(--ok)' : 'var(--warn)',
+    },
+    {
+      value: String(input.autonomousRepairs),
+      label: 'AUTONOMOUS REPAIRS',
+      note: input.autonomousRepairs === 0
+        ? 'Nothing needed repairing.'
+        : input.repairSummary ?? 'Diagnosed and repaired without asking.',
+      fg: 'var(--vio)',
+    },
+    {
+      value: String(recs.length),
+      label: 'RECOMMENDATIONS RAISED',
+      note: recs.length === 0
+        ? 'Nothing fell outside the autonomy boundary.'
+        // Named rather than counted: a reader needs to know which three.
+        : `${recs.map((r) => r.name.split(' · ')[0]).join(', ')} — each with an owner `
+          + 'and an action.',
+      fg: 'var(--warn)',
+    },
+  ];
+}
+
+export interface ArtifactCard {
+  artifactId: string;
+  title: string;
+  meta: string;
+  ext: string;
+  colour: string;
+}
+
+const ARTIFACT_COLOR: Record<string, string> = {
+  MIGRATION_REPORT: 'var(--acc)',
+  ASSESSMENT_REPORT: 'var(--acc)',
+  GIT_DIFF: 'var(--vio)',
+  BUILD_TEST_EVIDENCE: 'var(--warn)',
+};
+
+/** The evidence package, in the order the UX lists it. */
+export const ARTIFACT_ORDER = [
+  'MIGRATION_REPORT', 'ASSESSMENT_REPORT', 'GIT_DIFF', 'BUILD_TEST_EVIDENCE',
+];
+
+export function artifactCards(
+  artifacts: Array<{
+    artifactId: string; kind: string; title: string; displayMeta: string;
+    format: string; status: string;
+  }>,
+): ArtifactCard[] {
+  return artifacts
+    // A generating or failed artifact is not downloadable, and offering it would
+    // hand the reader a broken link.
+    .filter((a) => a.status === 'READY')
+    .sort((a, b) => ARTIFACT_ORDER.indexOf(a.kind) - ARTIFACT_ORDER.indexOf(b.kind))
+    .map((a) => ({
+      artifactId: a.artifactId,
+      title: a.title,
+      meta: a.displayMeta,
+      ext: a.format === 'MARKDOWN' ? 'MD' : a.format,
+      colour: ARTIFACT_COLOR[a.kind] ?? 'var(--acc)',
+    }));
+}
+
+export const OUTCOME_LABEL: Record<string, string> = {
+  VERIFIED: 'VERIFIED MIGRATION',
+  PARTIALLY_MIGRATED: 'PARTIALLY MIGRATED',
+  HUMAN_ACTION_REQUIRED: 'HUMAN ACTION REQUIRED',
+};
+
+export const OUTCOME_COLOR: Record<string, string> = {
+  VERIFIED: 'var(--ok)',
+  PARTIALLY_MIGRATED: 'var(--warn)',
+  HUMAN_ACTION_REQUIRED: 'var(--bad)',
+};

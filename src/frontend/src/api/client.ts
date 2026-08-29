@@ -213,6 +213,12 @@ export class ApiClient {
       `/projects/${projectId}/verification`,
     );
 
+  /** Carried forward from the assessment; the completion screen re-reads them. */
+  recommendations = (projectId: string) =>
+    this.request<{ count: number; recommendations: Recommendation[] }>(
+      `/projects/${projectId}/recommendations`,
+    );
+
   /** 404 until one is deployed, which requires the other checks to pass. */
   sandbox = (projectId: string) =>
     this.request<{ sandbox: SandboxDeployment }>(`/projects/${projectId}/sandbox`);

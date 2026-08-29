@@ -22,6 +22,7 @@ import { loadRegistry } from './core/discovery/providers';
 import { runDiscovery } from './worker/discoveryJob';
 import { runAssessment } from './worker/assessmentJob';
 import { runTestEngineering } from './worker/migrationJob';
+import { runReport } from './worker/reportJob';
 
 /**
  * Engine assets ship with the repository, not the bundle.
@@ -125,10 +126,24 @@ async function main(): Promise<void> {
         if (!project || !run) return;
         await runTestEngineering(project, run, {
           repos, projects, engine, model, executor, deployer, blobs, github, logger: log,
+          // The report's narrative is one call over verified state. Same client;
+          // named separately because it is a flow, not an agent.
+          reportModel: model,
         });
       })().catch((e) => log.error({ err: e, projectId }, 'migration job crashed'));
     },
     regenerateAssessment: assess,
+    generateReport: async (projectId) => {
+      const project = await repos.projects.byId(projectId);
+      const run = project?.current.migrationRunId
+        ? await repos.migrationRuns.findOne({
+            migrationRunId: project.current.migrationRunId,
+          } as never)
+        : null;
+      if (project && run) {
+        await runReport(project, run, { repos, blobs, logger: log, model });
+      }
+    },
     // Deliberately not awaited: discovery outlives the request that starts it,
     // and the client watches it over SSE rather than waiting on a response.
     startDiscovery: (project) => {

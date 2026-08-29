@@ -236,9 +236,10 @@ debt:
   - id: TD-012
     title: The backend has no working production build
     raised: 2026-08-29
+    resolved: 2026-08-29
     prd: PRD-02
     severity: MEDIUM
-    status: OPEN
+    status: RESOLVED
     what: >
       `npm run build -w @proteus/backend` fails with TS6059. `@proteus/schema` exports
       TypeScript source, so a backend emit pulls files outside its `rootDir`; and even if
@@ -249,11 +250,11 @@ debt:
       Nothing has needed a compiled backend yet: there is no Dockerfile and no deploy.
       Discovered while verifying PRD-08, not caused by it.
     fix: >
-      Decide with the deployment increment. Either give `schema` its own `tsc` emit and
-      point `exports` at `dist` with a source condition for development, or bundle the
-      backend with esbuild/tsup, which resolves the alias and inlines the schema in one
-      step. The bundler is the smaller change.
-    revisit: PRD-14, before the first container image is built.
+      Resolved in PRD-14 with the bundler, as predicted. `npm run build -w @proteus/backend`
+      now runs esbuild with `--packages=external`, which inlines the workspace schema and
+      leaves node_modules alone. The bundle loads and reaches its own config check.
+      `deployment/backend/Dockerfile` builds on it.
+    revisit: Not needed.
 
   - id: TD-013
     title: Compiled JavaScript was committed inside schema/src and shadowed the source

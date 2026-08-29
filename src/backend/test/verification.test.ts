@@ -788,7 +788,10 @@ describe('AC-10 · the reference scenario ends verified', () => {
       expect(verification.sandbox!.isProduction).toBe(false);
 
       const stored = (await t.repos.projects.byId(project.projectId))!;
-      expect(stored.stage).toBe('SANDBOX_READY');
+      // PRD-14 advances SANDBOX_READY → COMPLETED once the evidence package
+      // exists, which is what EXEC-VER-013 requires before a migration may be
+      // reported complete. Verification's own contribution is the verdict.
+      expect(stored.stage).toBe('COMPLETED');
       expect(stored.summary.verificationComplete).toBe(true);
       expect(stored.summary.sandboxDeployed).toBe(true);
       expect(stored.summary.sandboxUrl).toBe(sandboxUrl);

@@ -50,11 +50,16 @@ export function toPattern(glob: string): RegExp {
 /**
  * Every path the run touched, against everything the approved plan declared.
  *
- * Test-engineering changes are exempt: the plan declares what the *migration*
- * will change, and the tests written to judge it are authorised by
- * `EXEC-TEST-001` rather than by a plan item's path list. Holding generated
- * tests to the migration's declared paths would make writing them a scope
- * breach.
+ * The discriminator is what authorised the change, not what kind it is.
+ * `expectedChanges` is the contract for *implementation* changes — source,
+ * dependencies, configuration — and those are bound to the declared paths.
+ *
+ * A test, mock or fixture change is authorised by something else: the
+ * `EXEC-TEST-*` rules for one written up front, and a `testIntegrity` record
+ * for one made during a repair. The schema already refuses such a change
+ * without that record, so its presence is the authorisation, and holding it to
+ * the migration's path list as well would make spec §26's own example — "the
+ * agent should not ask: should I update the mock?" — a scope breach.
  */
 export function checkScope(
   changes: MigrationChange[],
@@ -65,7 +70,7 @@ export function checkScope(
 
   const breaches: ScopeBreach[] = [];
   for (const change of changes) {
-    if (change.intent === 'TEST_ENGINEERING') continue;
+    if (change.intent === 'TEST_ENGINEERING' || change.testIntegrity) continue;
     for (const file of change.files) {
       if (!patterns.some((re) => re.test(file.path))) {
         breaches.push({ path: file.path, changeId: change.changeId, sequence: change.sequence });
@@ -73,7 +78,9 @@ export function checkScope(
     }
   }
 
-  const migrationChanges = changes.filter((c) => c.intent !== 'TEST_ENGINEERING');
+  const migrationChanges = changes.filter(
+    (c) => c.intent !== 'TEST_ENGINEERING' && !c.testIntegrity,
+  );
 
   return {
     breaches,

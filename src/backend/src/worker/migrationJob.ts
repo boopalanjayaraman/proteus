@@ -24,6 +24,7 @@ import { GitHubReader } from '../integrations/github/client';
 import { GitWriter, migrationBranchName } from '../integrations/github/writer';
 import type { SandboxDeployer } from '../integrations/cloudrun/sandbox';
 import { runVerification, type VerificationJobOutcome } from './verificationJob';
+import { runReport } from './reportJob';
 import { runMigrationLoop, type LoopOutcome } from './migrationLoop';
 import type { BlobStore } from '../integrations/storage/blobs';
 
@@ -58,8 +59,8 @@ export interface MigrationJobDeps {
   fetchImpl?: typeof fetch;
   /** Deploys the verified build. PRD-13 supplies it. */
   deployer?: SandboxDeployer;
-  /** Produces the report and evidence package. PRD-14 supplies it. */
-  onVerified?: (run: MigrationRun) => void;
+  /** Absent to skip the narrative; the report renders without it. */
+  reportModel?: ModelClient;
 }
 
 export interface TestEngineeringOutcome {
@@ -365,9 +366,18 @@ export async function runTestEngineering(
           workdir: checkout.dir, commands,
           ...(deps.containerPort !== undefined ? { containerPort: deps.containerPort } : {}),
           ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
-          ...(deps.onVerified ? { onVerified: deps.onVerified } : {}),
         })
       : undefined;
+
+    // The evidence package. `EXEC-VER-013` puts it before the migration may be
+    // reported complete — it is the deliverable, not a by-product — so it runs
+    // whatever the verdict was, and the report says which verdict that is.
+    if (verification) {
+      await runReport(project, loop.run, {
+        repos, blobs, logger: deps.logger,
+        ...(deps.reportModel ? { model: deps.reportModel } : {}),
+      });
+    }
 
     return {
       run: loop.run,

@@ -1,6 +1,7 @@
 import { COLLECTIONS, User } from '@proteus/schema';
 import { initialsOf } from '@proteus/schema';
 import type { FastifyInstance } from 'fastify';
+import { sweepRotations } from '../../core/services/rotation';
 import type { Repositories } from '../../core/repositories';
 import { currentUser } from '../middleware/auth';
 
@@ -47,5 +48,32 @@ export function registerMeRoutes(app: FastifyInstance, repos: Repositories): voi
       .collection(COLLECTIONS.users)
       .updateOne({ userId: u.uid }, { $set: { ...set, updatedAt: new Date() } });
     return repos.users.findOne({ userId: u.uid } as never);
+  });
+}
+
+/**
+ * The rotation sweep, as an endpoint.
+ *
+ * Risk 4: reminders need a scheduler and this prototype has none. The smallest
+ * thing that works is an endpoint Cloud Scheduler can call — no cron process, no
+ * leader election, and the same code path a developer can hit by hand to see
+ * what it would do.
+ *
+ * Authenticated like everything else in this scope. Emitting is idempotent per
+ * credential version, so calling it repeatedly is harmless.
+ */
+export function registerMaintenanceRoutes(
+  app: FastifyInstance,
+  repos: Repositories,
+): void {
+  app.post('/maintenance/rotation-sweep', async () => {
+    const result = await sweepRotations(repos);
+    return {
+      scanned: result.scanned,
+      reminded: result.reminded.length,
+      // Already-reminded projects are reported but not re-emitted: a sweep that
+      // ran hourly would otherwise fill the audit trail with the same warning.
+      alreadyReminded: result.alreadyReminded.length,
+    };
   });
 }

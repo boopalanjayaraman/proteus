@@ -33,6 +33,8 @@ export function registerMigrationRoutes(
   blobs: BlobStore,
   /** Starts the migration once approved. Injected — this layer must not import `agent/`. */
   startMigration?: (projectId: string, migrationRunId: string) => void,
+  /** Regenerates the evidence package. Injected for the same reason. */
+  generateReport?: (projectId: string) => Promise<void>,
 ): void {
   app.get<{ Params: Params }>('/projects/:id/gates', async (req) => {
     await loadOwnedProject(repos, req, req.params.id);
@@ -197,6 +199,23 @@ export function registerMigrationRoutes(
     const sandbox = rows[0];
     if (!sandbox) throw ApiError.notFound('Sandbox deployment');
     return { sandbox };
+  });
+
+  /**
+   * Regenerates the evidence package.
+   *
+   * Reproducible by construction: the report is a pure transform of a stored
+   * snapshot, so regenerating after the fact produces the same bytes unless the
+   * underlying state actually changed.
+   */
+  app.post<{ Params: Params }>('/projects/:id/report', async (req, reply) => {
+    const project = await loadOwnedProject(repos, req, req.params.id);
+    if (!generateReport) throw ApiError.badRequest('Report generation is not configured.');
+    if (!project.current.migrationRunId) {
+      throw ApiError.badRequest('No migration has run for this project yet.');
+    }
+    await generateReport(req.params.id);
+    return reply.status(202).send({ status: 'GENERATING' });
   });
 
   app.post<{ Params: Params }>('/projects/:id/migration/approve', async (req, reply) => {
