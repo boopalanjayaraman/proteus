@@ -1245,9 +1245,12 @@ rules:
       language: Java
     then:
       patterns:
-        - 'Cipher\.getInstance\(\s*"RSA[^"]*"'
+        - 'Cipher\.getInstance\('
         - 'Cipher\.(WRAP_MODE|UNWRAP_MODE)'
       requireAll: true
+      # The transform is normally a constant rather than a literal, so the pattern
+      # matches the call and this constrains what it must resolve to.
+      resolvesTo: '^RSA'
       impliesUsage: KEY_TRANSPORT
       strength: STRONG
       extract: {algorithm: RSA, mode: fromCipherTransformString}
@@ -1257,6 +1260,9 @@ rules:
       establish key transport — the same API encrypts arbitrary payloads — but wrapping a
       SecretKey is unambiguously key transport, which is what makes the reference scenario's
       migration technically unambiguous. This is the rule that produces finding f1.
+      `resolvesTo` exists because production Java names its transform in a constant. A
+      pattern written against a string literal matches a tutorial and misses real code —
+      the fixture caught exactly that, which is what a fixture is for.
 
   - ruleId: EXEC-DET-002
     family: DETECTION_SIGNATURE
@@ -1268,7 +1274,8 @@ rules:
       fileKind: SOURCE
       language: Java
     then:
-      patterns: ['Cipher\.getInstance\(\s*"RSA[^"]*"']
+      patterns: ['Cipher\.getInstance\(']
+      resolvesTo: '^RSA'
       excludeWhenAlsoMatches: ['Cipher\.(WRAP_MODE|UNWRAP_MODE)']
       impliesUsage: UNKNOWN
       strength: WEAK
@@ -1291,8 +1298,8 @@ rules:
       language: Java
     then:
       patterns:
-        - 'Signature\.getInstance\(\s*"[^"]*with(RSA|ECDSA)[^"]*"'
-        - '\.sign\(\)|\.verify\('
+        - 'Signature\.getInstance\('
+      resolvesTo: 'with(RSA|ECDSA)'
       impliesUsage: DIGITAL_SIGNATURE
       strength: STRONG
     prohibitedActions: [REPLACE_ALGORITHM]

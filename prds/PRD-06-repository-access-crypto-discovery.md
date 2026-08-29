@@ -3,12 +3,12 @@
 | | |
 |---|---|
 | **Increment** | 06 |
-| **Status** | `PLANNED` |
+| **Status** | `DELIVERED` |
 | **Depends on** | PRD-01, PRD-05 |
 | **Unblocks** | PRD-07 |
 | **Demoable outcome** | None — foundation. Verified by command: point it at the demo repository and it emits the reference scenario's findings with evidence, no model involved. |
 | **Created** | 2026-08-29 |
-| **Delivered** | |
+| **Delivered** | 2026-08-29 |
 
 ---
 
@@ -107,16 +107,60 @@ findings are reproducible run to run.
 
 ## 9. Definition of done
 
-- [ ] All FRs implemented
-- [ ] All ACs verified
-- [ ] Typecheck and tests pass
-- [ ] §10 records what was actually built
+- [x] All FRs implemented
+- [x] All ACs verified — 17 tests, run against the real fixture
+- [x] Typecheck and tests pass (135 total)
+- [x] §10 records what was actually built
 
 ## 10. Delivery log
 
 | Date | Change | Why |
 |---|---|---|
+| 2026-08-29 | `integrations/github/client.ts` | Read-only checkout, token verification, line permalinks |
+| 2026-08-29 | `core/discovery/workingCopy.ts` | Tree walk and file classification |
+| 2026-08-29 | `core/discovery/profile.ts` | Language, build system, framework from the manifest |
+| 2026-08-29 | `core/discovery/detect.ts` | Runs `EXEC-DET-*` over a tree; candidates with evidence |
+| 2026-08-29 | `core/discovery/providers.ts`, `engine/data/provider-capability.json` | Capability from a registry, not a version comparison |
+| 2026-08-29 | **`resolvesTo` added to three detection rules** | See below |
 
-**Deviations from plan** —
+**Deviations from plan**
 
-**Deferred** —
+- **The detection rules did not match real code, and the fixture caught it.**
+  `EXEC-DET-001` and `EXEC-DET-003` were written against string literals —
+  `Cipher.getInstance("RSA/…")` — but production Java names its transform in a constant,
+  which is exactly what the fixture does. Both rules matched nothing. Fixed by adding
+  `resolvesTo` to the rule outcome: the pattern matches the API call, the rule states
+  what the resolved algorithm must look like, and the detector follows the identifier to
+  its declaration. This is the ordering working as intended — rules written first from
+  the standards, then validated against real code rather than defined by it.
+- **Comment filtering happens in the detector, not the rule.** `excludeWhenAlsoMatches`
+  is file-scoped, so it cannot tell a live call from the commented-out `PKCS1Padding`
+  variant two lines below it. A line beginning with a comment marker is skipped.
+- **`GitHubReader` exposes no write capability at all.** Spec §6 makes the pre-approval
+  phase read-only, and the cheapest guarantee is that the method does not exist. PRD-11
+  adds a separate writing client rather than extending this one.
+- **The token is stripped from the working copy's git remote** immediately after clone,
+  so it cannot be recovered from `.git/config` by anything that later reads the tree.
+- **git's stderr is redacted before it becomes an error message.** git echoes the failing
+  URL back, and the URL contains the token.
+- **`WorkingCopy` abstracts over a directory, not over GitHub.** Detection has no business
+  knowing where files came from, and it lets the tests run against the fixture directly
+  rather than cloning.
+
+**Verified against the fixture**
+
+    37 files scanned · 8 candidates
+    2 key-transport sites (CryptoService, CryptoUtils)     STRONG   -> migrate
+    2 signature sites (SettlementSigner)                   STRONG   -> leave alone
+    2 key-pair generators                                  STRONG
+    1 provider dependency                                  WEAK     -> investigate
+    bcprov-jdk18on 1.72 -> NOT_SUPPORTED (registry: from 1.78)
+
+**Deferred**
+
+- Persisting candidates as `findings` and `evidence` documents → PRD-07, which owns the
+  discovery run that writes them.
+- Document text extraction with page offsets → PRD-07. No PDFs exist to extract yet; the
+  HSM and gateway specifications are still to be written.
+- `credential.status` transition to `INVALID` is implemented in the client's `verify()`
+  but not yet wired to a persisted status change → PRD-07.

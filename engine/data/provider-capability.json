@@ -1,0 +1,40 @@
+{
+  "$comment": [
+    "Which crypto providers advertise which algorithms, and from which version.",
+    "",
+    "Referenced by EXEC-DET-005, which deliberately does NOT hardcode a version",
+    "comparison in the rule. 'bcprov < 1.78 lacks ML-KEM' is training knowledge, not",
+    "a corpus fact, and it goes stale. Keeping it here makes it data someone owns and",
+    "can correct, and an entry that is absent produces a finding that says so rather",
+    "than a guess.",
+    "",
+    "Definitive confirmation comes at build time from EXEC-VER-007, which observes",
+    "what the resolved provider actually advertises."
+  ],
+  "schemaVersion": 1,
+  "providers": [
+    {
+      "coordinates": "org.bouncycastle:bcprov-jdk18on",
+      "aliases": ["bcprov-jdk18on", "bcprov-jdk15on", "bcprov"],
+      "algorithms": {
+        "ML-KEM": {
+          "availableFrom": "1.78",
+          "note": "ML-KEM (FIPS 203) exposed through the BC provider.",
+          "confidence": "UNVERIFIED",
+          "source": "maintainer-entry"
+        },
+        "ML-DSA": {
+          "availableFrom": "1.78",
+          "confidence": "UNVERIFIED",
+          "source": "maintainer-entry"
+        }
+      }
+    },
+    {
+      "coordinates": "com.nimbusds:nimbus-jose-jwt",
+      "aliases": ["nimbus-jose-jwt"],
+      "algorithms": {},
+      "note": "JOSE/JWT signing. Not a key-establishment provider; no ML-KEM path."
+    }
+  ]
+}
