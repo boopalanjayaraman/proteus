@@ -61,10 +61,22 @@ export function registerAssessmentRoutes(
   /** Regeneration produces version N+1; it never mutates what was on screen. */
   app.post<{ Params: Params }>('/projects/:id/assessment', async (req, reply) => {
     const project = await loadOwnedProject(repos, req, req.params.id);
-    if (!regenerate) throw ApiError.badRequest('Assessment generation is not configured.');
+    // The project's own state is checked before the server's capability, so a
+    // request that would be refused anyway is refused for the reason the caller
+    // can act on.
     if (!project.summary.discoveryComplete) {
       throw ApiError.badRequest('Discovery has not completed for this project.');
     }
+    // Regenerating supersedes the previous version. Doing that to an approved
+    // assessment would break the only link between what a human authorised and
+    // what the migration is executing (PRD-10 FR-4).
+    if (project.summary.migrationApproved) {
+      throw ApiError.conflict(
+        'This assessment has been approved and a migration is under way. Regenerating '
+        + 'would supersede the approved scope.',
+      );
+    }
+    if (!regenerate) throw ApiError.badRequest('Assessment generation is not configured.');
     await regenerate(req.params.id);
     return reply.status(202).send({ status: 'GENERATING' });
   });

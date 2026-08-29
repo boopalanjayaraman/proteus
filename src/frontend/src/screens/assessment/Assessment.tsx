@@ -1,8 +1,11 @@
 import type { Artifact, Assessment as AssessmentDoc, Finding, PlanItem, Project, Recommendation } from '@proteus/schema';
 import { useCallback, useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../../app/AuthContext';
+import { ApiClientError } from '../../api/client';
+import { ApproveModal } from '../../components/approval/ApproveModal';
 import { FindingCard } from '../../components/findings/FindingCard';
+import { approvalErrorMessage, approvalRequest, approvalSubtitle, scopeOf } from '../../lib/approval';
 import { mix } from '../../lib/impact';
 
 /**
@@ -14,11 +17,6 @@ import { mix } from '../../lib/impact';
  * the autonomy boundary with an owner and an action is a result, not an
  * omission.
  */
-
-const AUTONOMOUS_MODES = new Set([
-  'AUTONOMOUS_MIGRATION', 'AUTONOMOUS_UPDATE', 'AUTONOMOUS_GENERATION',
-  'TEST_ENVIRONMENT_ADAPTATION',
-]);
 
 const MODE_COLOR: Record<string, string> = {
   AUTONOMOUS_MIGRATION: 'var(--bad)',
@@ -46,12 +44,16 @@ interface Data {
 export function Assessment() {
   const { id } = useParams<{ id: string }>();
   const { api } = useAuth();
+  const navigate = useNavigate();
 
   const [data, setData] = useState<Data | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [approving, setApproving] = useState(false);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -97,8 +99,34 @@ export function Assessment() {
   if (!data) return <div className="label">Loading assessment…</div>;
 
   const { assessment, findings, recommendations } = data;
-  const autonomousItems = assessment.planItems.filter((p) => AUTONOMOUS_MODES.has(p.mode));
+  const scope = scopeOf(assessment);
+  const autonomousItems = scope.autonomous;
   const report = artifacts.find((a) => a.kind === 'ASSESSMENT_REPORT');
+
+  /**
+   * The one call that turns a read-only analyser into an agent with write access.
+   *
+   * On success the project has moved to MIGRATING and a run exists, so the
+   * screen hands over rather than trying to render a state it no longer owns.
+   */
+  const approve = async () => {
+    if (!id) return;
+    setApproving(true);
+    setApprovalError(null);
+    try {
+      await api.approveMigration(id, approvalRequest(assessment));
+      setConfirming(false);
+      navigate(`/projects/${id}/migration`);
+    } catch (e) {
+      const err = e as ApiClientError;
+      setApprovalError(approvalErrorMessage(err.status, err.message));
+      // A refusal usually means the screen is behind the server. Reloading is
+      // what makes the next attempt meaningful rather than a repeat.
+      if (err.status === 409) await load();
+    } finally {
+      setApproving(false);
+    }
+  };
 
   const stats = [
     { value: findings.length, label: 'FINDINGS', fg: 'var(--fg)' },
@@ -248,15 +276,53 @@ export function Assessment() {
           <div>
             <div className="approve-title">Approve the proposed migration scope</div>
             <div className="mono approve-sub">
-              {assessment.planItems.length} PLAN ITEMS · {autonomousItems.length} AUTONOMOUS ·{' '}
-              {recommendations.length} RECOMMENDATIONS RAISED · ONE-TIME HUMAN GATE
+              {approvalSubtitle(assessment, recommendations.length)}
             </div>
           </div>
-          {/* The approval action itself is PRD-10. */}
-          <button className="primary compact" disabled title="Approval arrives in PRD-10">
+          <button
+            className="primary compact"
+            disabled={!scope.approvable}
+            title={
+              scope.approvable
+                ? undefined
+                : 'Nothing in this repository is inside the autonomy boundary.'
+            }
+            onClick={() => { setApprovalError(null); setConfirming(true); }}
+          >
             Approve migration →
           </button>
         </div>
+      )}
+
+      {/* Already authorised: the bar becomes the record of what was authorised,
+          which is the thing a reviewer needs after the fact. */}
+      {project && project.summary.migrationApproved && project.stage !== 'AWAITING_APPROVAL' && (
+        <div className="approve-bar approved">
+          <div>
+            <div className="approve-title">
+              Migration approved — {autonomousItems.length} plan item
+              {autonomousItems.length === 1 ? '' : 's'} authorised
+            </div>
+            <div className="mono approve-sub">
+              ASSESSMENT V{assessment.version} · APPROVED SCOPE RECORDED TO AUDIT TRAIL
+            </div>
+          </div>
+          <button className="ghost" onClick={() => navigate(`/projects/${id}/migration`)}>
+            View migration →
+          </button>
+        </div>
+      )}
+
+      {confirming && (
+        <ApproveModal
+          assessment={assessment}
+          busy={approving}
+          error={approvalError}
+          onConfirm={() => void approve()}
+          // FR-10: dismissing the dialog makes no request and leaves the project
+          // exactly where it was.
+          onCancel={() => { if (!approving) { setConfirming(false); setApprovalError(null); } }}
+        />
       )}
     </div>
   );

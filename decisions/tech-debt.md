@@ -254,6 +254,29 @@ debt:
       backend with esbuild/tsup, which resolves the alias and inlines the schema in one
       step. The bundler is the smaller change.
     revisit: PRD-14, before the first container image is built.
+
+  - id: TD-013
+    title: Compiled JavaScript was committed inside schema/src and shadowed the source
+    raised: 2026-08-29
+    prd: PRD-10
+    severity: HIGH
+    status: RESOLVED
+    what: >
+      `schema/src/` held a `.js` file beside every `.ts` file, committed in
+      11cc0f2 (PRD-08). Vite resolves `.js` before `.ts`, so `import './migration'`
+      from `schema/src/index.ts` loaded `migration.js` — build output from an
+      ad-hoc `tsc` run — in every workspace, tests included. A new export added to
+      `migration.ts` was `undefined` at runtime until the artefacts were deleted.
+    why: >
+      Nothing regenerated them on a schedule, so they were correct only by
+      coincidence: whenever someone happened to re-run `tsc` after an edit. Between
+      those runs, every test in the repository was asserting against a schema
+      nobody had edited, and would have kept passing while the source drifted.
+    fix: >
+      Deleted, `git rm --cached`-ed, and added to `.gitignore` as `schema/src/*.js`.
+      An architecture test now fails if any reappear, because the failure mode is
+      silent — the tests go green either way.
+    revisit: Not needed. Guarded by test.
 ```
 
 ---

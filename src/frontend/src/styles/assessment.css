@@ -137,3 +137,61 @@
 .approve-title { font: 500 12.5px var(--sans); }
 .approve-sub { font-size: 9.5px; color: var(--fg3); letter-spacing: 0.05em; }
 .primary.compact:disabled { opacity: 0.45; cursor: not-allowed; }
+.approve-bar.approved { border-color: color-mix(in srgb, var(--ok) 38%, transparent); }
+.linklike {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font: 400 12.5px var(--sans); color: var(--fg2);
+}
+.linklike:hover { color: var(--fg); }
+.linklike:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ── approval gate ─────────────────────────────────────────────────────── */
+.modal-scrim {
+  position: fixed; inset: 0; z-index: 40; padding: 34px;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(4, 6, 9, 0.72);
+}
+.modal {
+  width: 620px; max-width: 100%; max-height: 100%; overflow: auto;
+  padding: 24px 26px; display: flex; flex-direction: column; gap: 16px;
+  background: var(--sur); border: 1px solid var(--line2); border-radius: 9px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+}
+.modal-head { display: flex; flex-direction: column; gap: 8px; }
+.modal-eyebrow { font-size: 9.5px; letter-spacing: 0.16em; color: var(--acc); font-weight: 500; }
+.modal h2 { margin: 0; font: 300 22px/1.2 var(--sans); }
+.modal-lede { margin: 0; font: 300 12.5px/1.7 var(--sans); color: var(--fg2); text-wrap: pretty; }
+
+/* Two columns so seventeen actions read as a scope, not a wall. */
+.disclosure {
+  margin: 0; padding: 14px 16px; list-style: none;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px;
+  background: var(--rai); border: 1px solid var(--line); border-radius: 6px;
+}
+.disclosure li { display: flex; align-items: flex-start; gap: 8px;
+  font: 400 11px/1.5 var(--sans); color: var(--fg2); }
+.disclosure-arrow { flex: none; font-size: 10px; color: var(--acc); }
+
+.modal-scope { display: flex; flex-direction: column; gap: 5px; }
+.modal-scope-label { font-size: 9px; letter-spacing: 0.13em; color: var(--fg3); font-weight: 500; }
+.modal-scope-value { font: 400 12px/1.6 var(--sans); }
+.modal-scope-paths { font-size: 9.5px; line-height: 1.7; color: var(--fg3); word-break: break-all; }
+
+.modal-boundary {
+  padding: 11px 13px; border-radius: 5px;
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+  font: 400 11px/1.6 var(--sans); color: var(--fg2); text-wrap: pretty;
+}
+.modal-error {
+  padding: 10px 12px; border-radius: 5px;
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bad) 34%, transparent);
+  font: 400 11.5px/1.6 var(--sans); color: var(--fg);
+}
+.modal-foot { display: flex; align-items: center; gap: 14px; }
+.modal-foot-spacer { flex: 1; }
+.modal-audit { font-size: 9.5px; letter-spacing: 0.05em; color: var(--fg4); }
+
+@media (max-width: 620px) {
+  .disclosure { grid-template-columns: 1fr; }
+}

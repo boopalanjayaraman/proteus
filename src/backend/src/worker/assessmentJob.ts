@@ -5,6 +5,7 @@ import { AssessmentAgent, type FindingBrief } from '../agent/flows/assessment';
 import type { ModelClient } from '../agent/model';
 import type { RuleEngine } from '../core/rules/engine';
 import type { Repositories } from '../core/repositories';
+import type { ApprovalService } from '../core/services/approval';
 import { AssessmentService, PlanValidationError } from '../core/services/assessment';
 import { DispositionService } from '../core/services/dispositions';
 import { ensurePolicy } from '../core/services/policy';
@@ -26,6 +27,8 @@ export interface AssessmentJobDeps {
   engine: RuleEngine;
   model: ModelClient;
   blobs: BlobStore;
+  /** Opens the approval gate once the assessment is ready. */
+  approvals: ApprovalService;
   logger: Logger;
 }
 
@@ -129,10 +132,13 @@ export async function runAssessment(
 
   // The gate. Everything above is preparation; this is the moment the product
   // stops and asks (spec §20).
+  //
+  // Modelled as a HumanGate rather than a stage flag, so the single up-front
+  // approval and every mid-migration pause share one shape, one endpoint and one
+  // audit record. The gate carries the disclosure it was opened with; the
+  // approval carries what was acknowledged.
   await repos.projects.transition(project.projectId, 'ASSESSMENT_READY', 'AWAITING_APPROVAL');
-  await repos.projects.collection.updateOne({ projectId: project.projectId } as never, {
-    $set: { actionRequired: true } as never,
-  });
+  await deps.approvals.openApprovalGate(project.projectId, assessment);
 
   return assessment;
 }

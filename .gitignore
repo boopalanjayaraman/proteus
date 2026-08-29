@@ -5,6 +5,10 @@ node_modules/
 dist/
 target/
 *.class
+# Emitted beside the source it came from: a stale `migration.js` shadows
+# `migration.ts` because Vite resolves .js first, so every workspace silently
+# imports last week's schema. Never commit these.
+schema/src/*.js
 
 # Local configuration — never commit real credentials
 .env

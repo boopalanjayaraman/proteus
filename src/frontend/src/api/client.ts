@@ -1,6 +1,6 @@
 import type {
-  Artifact, Assessment, Evidence, Finding, GraphEdge, GraphNode, GraphStyle,
-  Project, ProjectEvent, Recommendation, User,
+  ApproveMigrationInput, Artifact, Assessment, Evidence, Finding, GraphEdge, GraphNode,
+  GraphStyle, HumanGate, MigrationRun, Project, ProjectEvent, Recommendation, User,
 } from '@proteus/schema';
 
 /**
@@ -144,6 +144,31 @@ export class ApiClient {
   /** Regeneration produces version N+1; it never edits what was on screen. */
   regenerateAssessment = (projectId: string) =>
     this.request<{ status: string }>(`/projects/${projectId}/assessment`, { method: 'POST', body: '{}' });
+
+  /**
+   * Authorises the migration.
+   *
+   * The body pins the assessment version and echoes the disclosure the modal
+   * showed. Both are checked server-side: approving a superseded assessment or a
+   * disclosure that is not the current one is refused rather than upgraded.
+   */
+  approveMigration = (projectId: string, body: ApproveMigrationInput) =>
+    this.request<{
+      migrationRunId: string; branch: string; approvedPlanItemIds: string[];
+      approvedAt: string; gateId?: string; created: boolean;
+    }>(`/projects/${projectId}/migration/approve`, {
+      method: 'POST', body: JSON.stringify(body),
+    });
+
+  /** Every gate this project has raised. The approval is the first of them. */
+  gates = (projectId: string) =>
+    this.request<{ count: number; open: number; gates: HumanGate[] }>(
+      `/projects/${projectId}/gates`,
+    );
+
+  /** 404 until a human approves — before that there is no branch and no run. */
+  migration = (projectId: string) =>
+    this.request<{ run: MigrationRun }>(`/projects/${projectId}/migration`);
 
   artifacts = (projectId: string) =>
     this.request<{ artifacts: Artifact[] }>(`/projects/${projectId}/artifacts`);

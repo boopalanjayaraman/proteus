@@ -28,6 +28,13 @@ const PERMITTED: Record<string, readonly PlanItemMode[]> = {
   NEEDS_FURTHER_INVESTIGATION: ['NO_AUTONOMOUS_CHANGE'],
 };
 
+export class ApprovedAssessmentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ApprovedAssessmentError';
+  }
+}
+
 export class PlanValidationError extends Error {
   constructor(readonly violations: string[]) {
     super(`plan rejected: ${violations.join('; ')}`);
@@ -141,6 +148,19 @@ export class AssessmentService {
     if (violations.length > 0) throw new PlanValidationError(violations);
 
     const { projectId } = input;
+
+    // An approved assessment is final. Writing version N+1 would mark it
+    // SUPERSEDED, and the migration would then be running against a scope
+    // nothing on screen still claims a human agreed to.
+    const approved = await this.repos.assessments.findOne({
+      projectId, status: 'APPROVED',
+    } as never);
+    if (approved) {
+      throw new ApprovedAssessmentError(
+        `${approved.assessmentId} has been approved; regenerating would supersede it.`,
+      );
+    }
+
     const now = new Date();
 
     // Narratives land on the findings, which is where every surface reads them.

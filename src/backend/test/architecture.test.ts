@@ -111,4 +111,14 @@ describe('architectural boundaries', () => {
     }
     expect(offenders, 'the agent is reachable from worker/ and server.ts only').toEqual([]);
   });
+
+  it('has no compiled JavaScript shadowing the shared schema source', async () => {
+    // Vite resolves `.js` before `.ts`, so a `migration.js` emitted beside
+    // `migration.ts` silently becomes what every workspace imports — including
+    // the tests, which then pass against a schema nobody edited. Found the hard
+    // way in PRD-10: a new export was invisible until the artefacts were deleted.
+    const schemaSrc = fileURLToPath(new URL('../../../schema/src', import.meta.url));
+    const shadows = (await readdir(schemaSrc)).filter((f) => f.endsWith('.js'));
+    expect(shadows, 'delete these; they are build output, not source').toEqual([]);
+  });
 });

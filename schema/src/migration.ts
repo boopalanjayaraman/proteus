@@ -19,6 +19,74 @@ import {
 
 /** Autonomous migration: runs, baselines, attempts, changes, executions. */
 
+/**
+ * What the user is told the migration will do, as data (spec §20).
+ *
+ * Stored here rather than written into the modal because two surfaces need the
+ * same words: the confirmation dialog that obtains consent, and the approval
+ * record that proves what was consented to. A list that lives only in JSX can
+ * drift from behaviour with nothing to catch it.
+ *
+ * Each item names the migration stages that carry it out, which turns "the
+ * wording matches the behaviour" into an assertion: every `MigrationStage` must
+ * be disclosed by something here before the user is asked to approve it.
+ *
+ * The list is the union of spec §20's sixteen bullets and the UX v1.2 modal.
+ * Where they differ the longer list wins in both directions — under-disclosing
+ * is the only failure mode that matters, so the spec's "validate the existing
+ * tests" and "rebuild and retest" are kept even though the mock drops them, and
+ * the mock's end-to-end verification is kept even though §20 omits it.
+ */
+export const MIGRATION_DISCLOSURE = [
+  { text: 'create a migration branch', stages: ['PREPARING_MIGRATION', 'CREATING_BRANCH'] },
+  { text: 'capture and validate the behavioural baseline', stages: ['CAPTURING_BASELINE'] },
+  {
+    text: 'assess test coverage and generate or extend automated tests where required',
+    stages: ['ASSESSING_TEST_COVERAGE', 'CREATING_TESTS'],
+  },
+  { text: 'generate or modify mocks', stages: ['PREPARING_MOCKS'] },
+  { text: 'validate the existing tests', stages: ['VALIDATING_BASELINE_TESTS'] },
+  { text: 'modify source code', stages: ['APPLYING_MIGRATION_CHANGES'] },
+  {
+    text: 'modify dependencies and configuration when appropriate',
+    stages: ['APPLYING_MIGRATION_CHANGES'],
+  },
+  { text: 'build the application', stages: ['BUILDING'] },
+  { text: 'execute the test suite', stages: ['RUNNING_TESTS'] },
+  { text: 'inspect and classify failures', stages: ['ANALYZING_FAILURE'] },
+  { text: 'autonomously attempt repairs', stages: ['REPAIRING'] },
+  { text: 'rebuild and retest', stages: ['REBUILDING', 'RETESTING'] },
+  { text: 'verify the resulting cryptographic state', stages: ['CRYPTO_VERIFYING'] },
+  { text: 'deploy a verified build into a sandbox environment', stages: ['SANDBOX_DEPLOYING'] },
+  {
+    text: 'run end-to-end verification against the sandbox deployment',
+    stages: ['END_TO_END_VERIFYING'],
+  },
+  // An output of the sandbox stage rather than a stage of its own, but disclosed
+  // because it is the thing the user is handed at the end of it.
+  { text: 'provide a link to the sandbox-deployed application', stages: [] },
+  { text: 'produce a complete migration evidence report', stages: ['COMPLETED'] },
+] as const satisfies readonly { text: string; stages: readonly MigrationStage[] }[];
+
+/** The disclosure as the modal renders it and the approval record stores it. */
+export const MIGRATION_DISCLOSURE_TEXT: readonly string[] =
+  MIGRATION_DISCLOSURE.map((d) => d.text);
+
+/**
+ * The counterweight to the list above, and the reason one approval is enough.
+ *
+ * Shown beneath the disclosure and stored on the gate: the boundary is part of
+ * what was agreed, not a reassurance added at render time.
+ */
+export const MIGRATION_UNTOUCHED_STATEMENT =
+  'The original branch, production systems, HSM configuration and vendor-controlled '
+  + 'devices remain untouched. A new human gate is raised only if a consequential '
+  + 'boundary is crossed.';
+
+/** The two answers to the approval gate. Modelled so the audit record names one. */
+export const APPROVE_OPTION_ID = 'APPROVE';
+export const DECLINE_OPTION_ID = 'DECLINE';
+
 export const MigrationRun = z.object({
   ...baseDocFields,
   migrationRunId: Id,

@@ -9,7 +9,9 @@ import { registerHealthRoutes } from './routes/health';
 import { registerMeRoutes } from './routes/me';
 import { registerAssessmentRoutes } from './routes/assessment';
 import { registerGraphRoutes } from './routes/graph';
+import { registerMigrationRoutes } from './routes/migration';
 import { registerProjectRoutes } from './routes/projects';
+import type { ApprovalService } from '../core/services/approval';
 import type { AssessmentService } from '../core/services/assessment';
 import type { GraphService } from '../core/services/graph';
 import type { BlobStore } from '../integrations/storage/blobs';
@@ -20,6 +22,7 @@ export interface ServerOptions {
   projects: ProjectService;
   graph: GraphService;
   assessments: AssessmentService;
+  approvals: ApprovalService;
   blobs: BlobStore;
   /** Regenerates an assessment. Needs the model, so it is injected. */
   regenerateAssessment?: (projectId: string) => Promise<void>;
@@ -27,6 +30,8 @@ export interface ServerOptions {
   logger: Logger;
   /** Kicks off discovery after a project is created. Absent in tests that do not clone. */
   startDiscovery?: (project: Project) => void;
+  /** Kicks off the migration once a human has approved it. PRD-11 supplies it. */
+  startMigration?: (projectId: string, migrationRunId: string) => void;
 }
 
 /**
@@ -61,6 +66,7 @@ export async function buildServer(opts: ServerOptions): Promise<FastifyInstance>
     registerAssessmentRoutes(
       authed, opts.repos, opts.assessments, opts.blobs, opts.regenerateAssessment,
     );
+    registerMigrationRoutes(authed, opts.repos, opts.approvals, opts.startMigration);
     registerEventRoutes(authed, opts.repos);
   });
 

@@ -6,6 +6,7 @@ import { FirebaseTokenVerifier, type TokenVerifier } from './api/middleware/auth
 import { changeStreamsAvailable, connect, disconnect, redactUri } from './core/db/client';
 import { ensureIndexes } from './core/db/indexes';
 import { Repositories } from './core/repositories';
+import { ApprovalService } from './core/services/approval';
 import { AssessmentService } from './core/services/assessment';
 import { GraphService } from './core/services/graph';
 import { ProjectService } from './core/services/projects';
@@ -90,14 +91,17 @@ async function main(): Promise<void> {
 
   const model = new GeminiClient(geminiConfig().GEMINI_MODEL, geminiConfig().GEMINI_API_KEY);
   const assessments = new AssessmentService(repos);
+  const approvals = new ApprovalService(repos);
 
   const assess = async (projectId: string): Promise<void> => {
     const project = await repos.projects.byId(projectId);
-    if (project) await runAssessment(project, { repos, engine, model, blobs, logger: log });
+    if (project) {
+      await runAssessment(project, { repos, engine, model, blobs, approvals, logger: log });
+    }
   };
 
   const app = await buildServer({
-    repos, projects, graph, assessments, blobs, verifier, logger: log,
+    repos, projects, graph, assessments, approvals, blobs, verifier, logger: log,
     regenerateAssessment: assess,
     // Deliberately not awaited: discovery outlives the request that starts it,
     // and the client watches it over SSE rather than waiting on a response.
