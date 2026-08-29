@@ -1,4 +1,6 @@
-import type { Project, ProjectEvent, User } from '@proteus/schema';
+import type {
+  Evidence, GraphEdge, GraphNode, GraphStyle, Project, ProjectEvent, User,
+} from '@proteus/schema';
 
 /**
  * The typed API client.
@@ -85,6 +87,44 @@ export class ApiClient {
     if (opts.level?.length) q.set('level', opts.level.join(','));
     return this.request<{ events: ProjectEvent[]; count: number }>(
       `/projects/${projectId}/events${q.size ? `?${q}` : ''}`,
+    );
+  };
+
+  /** Nodes and edges in reveal order, plus the version a client compares against. */
+  graph = (projectId: string) =>
+    this.request<{
+      projectId: string; graphVersion: number; nodes: GraphNode[]; edges: GraphEdge[];
+    }>(`/projects/${projectId}/graph`);
+
+  /** The inspector's chips, fetched for one node at a time. */
+  evidence = (projectId: string, ids: string[]) =>
+    ids.length === 0
+      ? Promise.resolve({ evidence: [] as Evidence[] })
+      : this.request<{ evidence: Evidence[] }>(
+          `/projects/${projectId}/evidence?ids=${encodeURIComponent(ids.join(','))}`,
+        );
+
+  blastRadius = (projectId: string, nodeId: string) =>
+    this.request<{ nodeId: string; upstream: string[] }>(
+      `/projects/${projectId}/graph/nodes/${encodeURIComponent(nodeId)}/blast-radius`,
+    );
+
+  /** A deliberate placement, scoped to the style it was made in. `null` clears it. */
+  pinNode = async (
+    projectId: string, nodeId: string,
+    pin: { x: number; y: number; style: GraphStyle } | null,
+  ) => {
+    const token = await this.token();
+    await fetch(
+      `${this.baseUrl}/projects/${projectId}/graph/nodes/${encodeURIComponent(nodeId)}/pin`,
+      {
+        method: 'PATCH',
+        headers: {
+          'content-type': 'application/json',
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(pin),
+      },
     );
   };
 

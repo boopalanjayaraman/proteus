@@ -64,6 +64,9 @@ export const DiscoveryRun = z.object({
     at: Timestamp,
   }),
   lease: z.object({ holder: z.string(), expiresAt: Timestamp }).optional(),
+
+  /** Why the run stopped. Set only when `status` is FAILED. */
+  error: z.string().max(2000).optional(),
 });
 export type DiscoveryRun = z.infer<typeof DiscoveryRun>;
 

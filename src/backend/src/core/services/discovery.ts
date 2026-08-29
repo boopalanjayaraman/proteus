@@ -1,9 +1,12 @@
 import {
   makeNodeId, type DiscoveryRun, type DiscoveryStage, type Evidence,
-  type EvidenceInput, type Finding,
+  type EvidenceInput, type Finding, type RepositoryProfile,
 } from '@proteus/schema';
 import type { Candidate, DetectionResult, DependencyFinding } from '../discovery/detect';
+import type { EnvironmentFact } from '../discovery/environment';
 import type { Repositories } from '../repositories';
+import { buildGraph } from './graphBuilder';
+import { GraphService } from './graph';
 
 /**
  * The discovery run.
@@ -29,8 +32,24 @@ export function stageProgress(stage: DiscoveryStage): number {
   return Math.round((i / (DISCOVERY_STAGES.length - 1)) * 100);
 }
 
+export interface CandidateLinks {
+  evidenceIds: string[];
+  findingIds: string[];
+}
+
+export interface PersistResult {
+  findings: number;
+  evidence: number;
+  /** Keyed by candidate `dedupeKey`. */
+  links: Map<string, CandidateLinks>;
+}
+
 export class DiscoveryService {
-  constructor(private readonly repos: Repositories) {}
+  private readonly graph: GraphService;
+
+  constructor(private readonly repos: Repositories, graph?: GraphService) {
+    this.graph = graph ?? new GraphService(repos);
+  }
 
   async start(projectId: string, holder: string): Promise<DiscoveryRun> {
     const now = new Date();
@@ -106,13 +125,25 @@ export class DiscoveryService {
     projectId: string,
     result: DetectionResult,
     dependencies: DependencyFinding[],
-  ): Promise<{ findings: number; evidence: number }> {
+  ): Promise<PersistResult> {
     let findings = 0;
     let evidence = 0;
+    // What each candidate produced, so the graph can cite it rather than
+    // re-derive it. Keyed by dedupeKey because that is what identifies a
+    // candidate across a re-run.
+    const links = new Map<string, CandidateLinks>();
+    const link = (key: string): CandidateLinks => {
+      const existing = links.get(key);
+      if (existing) return existing;
+      const fresh: CandidateLinks = { evidenceIds: [], findingIds: [] };
+      links.set(key, fresh);
+      return fresh;
+    };
 
     for (const c of result.candidates) {
       const evidenceId = await this.saveEvidence(projectId, c.evidence);
       evidence++;
+      link(c.dedupeKey).evidenceIds.push(evidenceId);
 
       const existing = await this.repos.findings.findOne(
         { projectId, dedupeKey: c.dedupeKey } as never,
@@ -122,6 +153,7 @@ export class DiscoveryService {
           { findingId: existing.findingId } as never,
           { $addToSet: { evidenceIds: evidenceId } as never, $set: { updatedAt: new Date() } as never },
         );
+        link(c.dedupeKey).findingIds.push(existing.findingId);
         continue;
       }
 
@@ -154,6 +186,7 @@ export class DiscoveryService {
         discoveredAt: now,
       };
       await this.repos.findings.insert(finding);
+      link(c.dedupeKey).findingIds.push(finding.findingId);
       findings++;
     }
 
@@ -171,7 +204,64 @@ export class DiscoveryService {
     await this.repos.projects.collection.updateOne({ projectId } as never, {
       $set: { 'summary.counts.findings': await this.repos.findings.count({ projectId } as never) } as never,
     });
-    return { findings, evidence };
+    return { findings, evidence, links };
+  }
+
+  /**
+   * Builds the graph from what the scan established.
+   *
+   * Runs after the findings are persisted so every node can cite a finding id
+   * that already exists — a node pointing at nothing would break the inspector
+   * panel, which resolves its evidence list on open.
+   */
+  async buildGraph(
+    run: DiscoveryRun,
+    input: {
+      profile: RepositoryProfile;
+      repositoryName: string;
+      candidates: Candidate[];
+      dependencies: DependencyFinding[];
+      environment?: EnvironmentFact[];
+      links: Map<string, CandidateLinks>;
+    },
+  ): Promise<{ nodes: number; edges: number }> {
+    await this.advance(run, 'BUILDING_GRAPH');
+
+    await buildGraph(this.graph, {
+      projectId: run.projectId,
+      profile: input.profile,
+      repositoryName: input.repositoryName,
+      candidates: input.candidates,
+      dependencies: input.dependencies,
+      environment: input.environment,
+      saveEvidence: (e) => this.saveEvidence(run.projectId, e),
+      evidenceFor: (c) => input.links.get(c.dedupeKey)?.evidenceIds ?? [],
+      findingFor: (c) => input.links.get(c.dedupeKey)?.findingIds ?? [],
+      onCreated: async (kind, id, label) => {
+        await this.repos.events.emit(run.projectId, {
+          type: kind === 'NODE' ? 'GRAPH_NODE_ADDED' : 'GRAPH_RELATIONSHIP_ADDED',
+          phase: 'DISCOVERY',
+          // The canvas animates on these, so they are ACTIVITY rather than
+          // DETAIL: a filtered feed that hides them would leave the graph
+          // growing with nothing in the feed to explain why.
+          level: 'ACTIVITY', severity: 'INFO',
+          title: kind === 'NODE' ? `Graph node: ${label}` : `Graph relationship: ${label}`,
+          actor: 'AGENT', refs: kind === 'NODE' ? { nodeId: id } : { edgeId: id },
+          stage: 'BUILDING_GRAPH',
+        });
+      },
+    });
+
+    // `graphVersion` is bumped by the upserts themselves (FR-9), not here — a
+    // second bump per build would make the counter mean two different things.
+    const counts = await this.graph.counts(run.projectId);
+    await this.repos.projects.collection.updateOne({ projectId: run.projectId } as never, {
+      $set: {
+        'summary.counts.graphNodes': counts.nodes,
+        'summary.counts.graphEdges': counts.edges,
+      } as never,
+    });
+    return counts;
   }
 
   async saveEvidence(projectId: string, input: EvidenceInput): Promise<string> {
@@ -187,6 +277,27 @@ export class DiscoveryService {
     };
     await this.repos.evidence.insert(doc);
     return evidenceId;
+  }
+
+  /**
+   * Ends a run that could not finish.
+   *
+   * The project moves to FAILED rather than staying ANALYZING forever: a run
+   * that is quietly stuck is worse than one that says it broke, because nobody
+   * goes looking for it.
+   */
+  async fail(run: DiscoveryRun, reason: string): Promise<void> {
+    const at = new Date();
+    await this.repos.discoveryRuns.patch({ discoveryRunId: run.discoveryRunId } as never, {
+      status: 'FAILED', completedAt: at, updatedAt: at, error: reason.slice(0, 2000),
+    } as never);
+    await this.repos.projects.transition(run.projectId, 'ANALYZING', 'FAILED').catch(() => undefined);
+    await this.repos.events.emit(run.projectId, {
+      type: 'DISCOVERY_FAILED', phase: 'DISCOVERY', level: 'MILESTONE', severity: 'ERROR',
+      title: 'Discovery failed', message: reason.slice(0, 2000),
+      actor: 'SYSTEM', refs: {}, stage: run.stage,
+    });
+    await this.repos.discoveryLease.release(run.discoveryRunId, 'any').catch(() => undefined);
   }
 
   /** Ends the run and hands over to assessment (spec §13). */

@@ -3,12 +3,12 @@
 | | |
 |---|---|
 | **Increment** | 08 |
-| **Status** | `PLANNED` |
+| **Status** | `DELIVERED` |
 | **Depends on** | PRD-07 |
 | **Unblocks** | PRD-09 |
 | **Demoable outcome** | Watch the crypto dependency graph build itself node by node during discovery, click any node, and see the evidence behind it. |
 | **Created** | 2026-08-29 |
-| **Delivered** | |
+| **Delivered** | 2026-08-29 |
 
 ---
 
@@ -87,7 +87,7 @@ evidence, and observed facts are visibly distinct from inferred ones.
 | ID | Criterion | Verified by |
 |---|---|---|
 | AC-1 | Asserting the same HSM from three documents yields one node with three evidence records | test |
-| AC-2 | The reference scenario produces 14 nodes and 15 edges | test |
+| AC-2 | The reference scenario produces 15 nodes and 16 edges | test |
 | AC-3 | Refresh mid-discovery restores the graph identically, including node order | screen |
 | AC-4 | Inferred edges render dashed; observed solid | screen |
 | AC-5 | Switching style recomputes positions without a server call | screen |
@@ -105,16 +105,59 @@ evidence, and observed facts are visibly distinct from inferred ones.
 
 ## 9. Definition of done
 
-- [ ] All FRs implemented
-- [ ] All ACs verified
-- [ ] Typecheck and tests pass
-- [ ] §10 records what was actually built
+- [x] All FRs implemented
+- [x] All ACs verified — AC-3, AC-4, AC-6 and AC-7 are screen criteria, covered in code by the same functions the tests exercise
+- [x] Typecheck and tests pass — 153 backend, 23 frontend, lint clean
+- [x] §10 records what was actually built
 
 ## 10. Delivery log
 
 | Date | Change | Why |
 |---|---|---|
+| 2026-08-29 | `core/services/graph.ts` | Idempotent node and edge upsert, roll-up, snapshot, `$graphLookup` blast radius, pin |
+| 2026-08-29 | `core/services/graphBuilder.ts` | Turns candidates, dependencies and environment facts into nodes and edges |
+| 2026-08-29 | `core/discovery/environment.ts` | Protocols, certificates and boundaries — the crypto a repository declares rather than calls |
+| 2026-08-29 | `core/services/discovery.ts` | `buildGraph` stage, `fail`, and a link map so the graph cites what was persisted |
+| 2026-08-29 | `api/routes/graph.ts` | `GET /graph`, `GET /evidence`, `GET .../blast-radius`, `PATCH .../pin` |
+| 2026-08-29 | `worker/discoveryJob.ts` | Clone → scan → agent → persist → graph as one resumable job (carried from PRD-07) |
+| 2026-08-29 | `frontend/lib/layout.ts` | Three layout styles, computed in the browser, seeded by `nodeId` |
+| 2026-08-29 | `frontend/screens/discovery/Discovery.tsx` and friends | The Live Discovery screen — FR-11 of PRD-07, closed here |
+| 2026-08-29 | `test/graph.test.ts`, `test/layout.test.ts`, `test/api.test.ts` | 5 + 10 + 5 new cases |
 
-**Deviations from plan** —
+**Deviations from plan**
 
-**Deferred** —
+- **AC-2 is 15 nodes and 16 edges, not 14 and 15.** The number in §7 came from the UX
+  mock; this is what the fixture actually produces. The test asserts the type breakdown
+  as well as the total, so a refactor that keeps the count but loses `PROTOCOL` or
+  `CERTIFICATE` still fails.
+- **`core/discovery/environment.ts` was not in the plan.** The code scan found 8 candidates
+  in 6 files and no certificate, protocol or external service — because none of those call
+  `Cipher.getInstance`. A PQC graph without the TLS edge, the certificate and the acquirer
+  boundary is not a PQC graph, and FR-11 explicitly wants the TLS → API `SECURES` edge, so
+  the declared cryptography is read out of config and certificate files deterministically.
+  It arrives as OBSERVED because a file said so, not because a model recalled it.
+- **`graphVersion` bumps per write, not per build.** FR-9 says "increments on any write",
+  and the upserts already did it. The build no longer adds a bump of its own, which would
+  have made the counter mean two different things.
+- **Two additive schema changes**, contrary to §5's "none": `DISCOVERY_FAILED` as an event
+  type and `DiscoveryRun.error`. The failure path had nowhere to say what went wrong, and a
+  run stuck in ANALYZING forever is worse than one that says it broke.
+- **A drag pins, a click selects.** Distinguished by whether the pointer moved, so selecting
+  a node to read its evidence never leaves an accidental pin behind.
+- **Evidence is fetched per node, not embedded in the graph payload.** A thirty-node graph
+  would otherwise carry every excerpt on every refetch, and the inspector needs them for
+  one node at a time.
+- **A fourth architecture test**: only `worker/` and `server.ts` may import `agent/`. The
+  new job is the first code that legitimately sees both halves, so the rule that keeps
+  `agent/` extractable is now stated rather than assumed.
+
+**Deferred**
+
+- **`GRAPH_NODE_UPDATED` and `GRAPH_RELATIONSHIP_UPDATED` are never emitted.** Only the
+  creating write emits. Re-observation enriches silently, which is right for discovery —
+  a feed row per re-assertion would be noise — but migration-time graph updates (PRD-12)
+  will need them.
+- **Document correlation is not wired into the job.** `DiscoveryAgent.correlate` exists and
+  is tested; nothing calls it because no uploaded document is text-extracted yet. Same
+  blocker as PRD-07 recorded.
+- **A CI workflow still does not exist** — TD-005. Nothing runs on push.

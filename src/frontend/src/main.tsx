@@ -6,6 +6,7 @@ import { AuthProvider } from './app/AuthContext';
 import { ThemeProvider } from './app/ThemeContext';
 import './styles/tokens.css';
 import './styles/shell.css';
+import './styles/discovery.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

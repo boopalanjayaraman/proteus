@@ -192,6 +192,68 @@ debt:
       src/backend/src/config/logger.ts. Pino with scrubbing at the serialiser hook plus
       key-path redaction, so neither a token in a message nor a secret in a nested object
       reaches stdout. Wired through Fastify and the startup banner.
+
+  - id: TD-010
+    title: The discovery job runs in the API process
+    raised: 2026-08-29
+    prd: PRD-08
+    severity: MEDIUM
+    status: OPEN
+    what: >
+      `startDiscovery` fires `runDiscovery` as an unawaited promise inside the Fastify
+      process. A clone, a full scan and several model calls therefore share a container
+      with request handling, and an instance restart mid-run leaves the lease to expire
+      rather than resuming.
+    why: >
+      Deliberate for the hackathon: it removes a queue, a job image and a deploy from the
+      critical path, and the checkpoint and lease machinery that makes it resumable is
+      already built and tested. `worker/` exists precisely so this can move without a
+      rewrite.
+    fix: >
+      Run `worker/discoveryJob.ts` as a Cloud Run Job triggered by the create endpoint,
+      and have a supervisor resume any run whose lease has lapsed at its checkpoint.
+    revisit: Before any deployment that carries real load.
+
+  - id: TD-011
+    title: Node identity depends on the name the agent chooses
+    raised: 2026-08-29
+    prd: PRD-08
+    severity: LOW
+    status: OPEN
+    what: >
+      `makeNodeId` slugs a canonical name, so "Thales payShield 10K" and "Thales
+      PayShield 10k" converge but "payShield 10K" and "Thales payShield" do not. Recorded
+      as Risk 1 in PRD-08 and accepted at this scale.
+    why: >
+      An alias table is the real fix and needs a source of truth for device and vendor
+      names that does not exist yet. The residual risk is a duplicate node, which is
+      visible and correctable, not a wrong assessment.
+    fix: >
+      An alias resolution pass before upsert, seeded from the provider registry, with
+      unmatched names surfaced for confirmation rather than silently merged.
+    revisit: When a second repository with hardware dependencies is onboarded.
+
+  - id: TD-012
+    title: The backend has no working production build
+    raised: 2026-08-29
+    prd: PRD-02
+    severity: MEDIUM
+    status: OPEN
+    what: >
+      `npm run build -w @proteus/backend` fails with TS6059. `@proteus/schema` exports
+      TypeScript source, so a backend emit pulls files outside its `rootDir`; and even if
+      it emitted, the `@proteus/schema` path alias is not rewritten, so `node dist/server.js`
+      could not resolve it. Typecheck, tests and the frontend build are unaffected —
+      development runs through `tsx`, which resolves the alias at load time.
+    why: >
+      Nothing has needed a compiled backend yet: there is no Dockerfile and no deploy.
+      Discovered while verifying PRD-08, not caused by it.
+    fix: >
+      Decide with the deployment increment. Either give `schema` its own `tsc` emit and
+      point `exports` at `dist` with a source condition for development, or bundle the
+      backend with esbuild/tsup, which resolves the alias and inlines the schema in one
+      step. The bundler is the smaller change.
+    revisit: PRD-14, before the first container image is built.
 ```
 
 ---

@@ -247,3 +247,66 @@ describe('user profile', () => {
     expect(me.preferences.graphStyle).toBe('radial');
   });
 });
+
+describe('PRD-08 · graph endpoints', () => {
+  it('returns nodes and edges in sequence order with the version a client compares', async () => {
+    const p = await ownedProject();
+    await s.graph.upsertNode(p.projectId, { type: 'ALGORITHM', canonicalName: 'RSA key transport' }, 1);
+    await s.graph.upsertNode(p.projectId, { type: 'SERVICE', canonicalName: 'payments-api' }, 0);
+
+    const r = await fetch(`${s.url}/projects/${p.projectId}/graph`, { headers: authFor(OWNER) });
+    expect(r.status).toBe(200);
+    const body = await r.json();
+    // Asserted second, revealed first — sequence, not write order.
+    expect(body.nodes.map((n: { type: string }) => n.type)).toEqual(['SERVICE', 'ALGORITHM']);
+    expect(body.graphVersion).toBeGreaterThan(0);
+  });
+
+  it("hides another user's graph behind a 404", async () => {
+    const p = await ownedProject(OWNER);
+    const r = await fetch(`${s.url}/projects/${p.projectId}/graph`, { headers: authFor(OTHER) });
+    expect(r.status).toBe(404);
+  });
+
+  it('persists a pin and clears it on a null body', async () => {
+    const p = await ownedProject();
+    const n = await s.graph.upsertNode(p.projectId, { type: 'HSM', canonicalName: 'payShield 10K' }, 0);
+    const url = `${s.url}/projects/${p.projectId}/graph/nodes/${encodeURIComponent(n.id)}/pin`;
+    const headers = { ...authFor(OWNER), 'content-type': 'application/json' };
+
+    expect((await fetch(url, { method: 'PATCH', headers, body: JSON.stringify({ x: 10, y: 20, style: 'force' }) })).status).toBe(204);
+    let body = await (await fetch(`${s.url}/projects/${p.projectId}/graph`, { headers: authFor(OWNER) })).json();
+    expect(body.nodes[0].pin).toEqual({ x: 10, y: 20, style: 'force' });
+
+    expect((await fetch(url, { method: 'PATCH', headers, body: 'null' })).status).toBe(204);
+    body = await (await fetch(`${s.url}/projects/${p.projectId}/graph`, { headers: authFor(OWNER) })).json();
+    expect(body.nodes[0].pin).toBeUndefined();
+  });
+
+  it('rejects a layout style the client did not compute', async () => {
+    const p = await ownedProject();
+    const n = await s.graph.upsertNode(p.projectId, { type: 'HSM', canonicalName: 'payShield 10K' }, 0);
+    const r = await fetch(
+      `${s.url}/projects/${p.projectId}/graph/nodes/${encodeURIComponent(n.id)}/pin`,
+      {
+        method: 'PATCH',
+        headers: { ...authFor(OWNER), 'content-type': 'application/json' },
+        body: JSON.stringify({ x: 1, y: 2, style: 'isometric' }),
+      },
+    );
+    expect(r.status).toBe(400);
+  });
+
+  it('answers blast radius over the API', async () => {
+    const p = await ownedProject();
+    const api = await s.graph.upsertNode(p.projectId, { type: 'SERVICE', canonicalName: 'payments-api' }, 0);
+    const rsa = await s.graph.upsertNode(p.projectId, { type: 'ALGORITHM', canonicalName: 'RSA key transport' }, 1);
+    await s.graph.upsertEdge(p.projectId, { fromNodeId: api.id, toNodeId: rsa.id, relationship: 'ENCRYPTS_WITH' }, 2);
+
+    const r = await fetch(
+      `${s.url}/projects/${p.projectId}/graph/nodes/${encodeURIComponent(rsa.id)}/blast-radius`,
+      { headers: authFor(OWNER) },
+    );
+    expect((await r.json()).upstream).toEqual([api.id]);
+  });
+});

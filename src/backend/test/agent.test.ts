@@ -50,8 +50,6 @@ describe('AC-1 · A1 holds no write tool', () => {
 
 describe('AC-2 · deterministic detection runs before the agent', () => {
   it('the agent is asked only about signals the scanner could not resolve', async () => {
-    const model = new ScriptedModel({});
-    const agent = new DiscoveryAgent(model);
     const { candidates } = await detect(engine, wc, 'abc1234', () => undefined);
 
     const strong = candidates.filter((c) => c.strength === 'STRONG' && c.usage !== 'UNKNOWN');

@@ -49,7 +49,7 @@ describe('architectural boundaries', () => {
 
   it('verification/ never imports agent/ — the verifier cannot consult the model', async () => {
     const dir = join(SRC, 'verification');
-    let files: string[] = [];
+    let files: string[];
     try { files = await tsFiles(dir); } catch { return; } // not built yet
 
     const offenders: string[] = [];
@@ -63,7 +63,7 @@ describe('architectural boundaries', () => {
 
   it('agent/ never touches the MongoDB driver directly', async () => {
     const dir = join(SRC, 'agent');
-    let files: string[] = [];
+    let files: string[];
     try { files = await tsFiles(dir); } catch { return; }
 
     const offenders: string[] = [];
@@ -89,5 +89,26 @@ describe('architectural boundaries', () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('only worker/ and server.ts join the deterministic and reasoning halves', async () => {
+    // The orchestration has to see both, and exactly one place should. If a
+    // route or a repository starts importing the agent, the boundary that makes
+    // `agent/` extractable has quietly gone.
+    const allowed = /^(worker\/|server\.ts$)/;
+    const offenders: string[] = [];
+
+    for (const dir of ['api', 'core', 'integrations', 'verification', 'reports']) {
+      let files: string[];
+      try { files = await tsFiles(join(SRC, dir)); } catch { continue; }
+      for (const f of files) {
+        const rel = relative(SRC, f);
+        if (allowed.test(rel)) continue;
+        for (const spec of await importsOf(f)) {
+          if (/(^|\/)agent\//.test(spec)) offenders.push(`${rel} -> ${spec}`);
+        }
+      }
+    }
+    expect(offenders, 'the agent is reachable from worker/ and server.ts only').toEqual([]);
   });
 });

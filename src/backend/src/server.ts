@@ -1,14 +1,30 @@
-import { coreConfig, configuredFeatures, firebaseConfig } from './config/env';
+import { fileURLToPath } from 'node:url';
+import { coreConfig, configuredFeatures, firebaseConfig, geminiConfig } from './config/env';
 import { createLogger } from './config/logger';
 import { buildServer } from './api/server';
 import { FirebaseTokenVerifier, type TokenVerifier } from './api/middleware/auth';
 import { changeStreamsAvailable, connect, disconnect, redactUri } from './core/db/client';
 import { ensureIndexes } from './core/db/indexes';
 import { Repositories } from './core/repositories';
+import { GraphService } from './core/services/graph';
 import { ProjectService } from './core/services/projects';
 import { GcpSecretVault } from './integrations/secrets/vault';
 import { GcsBlobStore } from './integrations/storage/blobs';
 import { gcpConfig } from './config/env';
+import { GeminiClient } from './agent/model';
+import { RuleEngine } from './core/rules/engine';
+import { loadRegistry } from './core/discovery/providers';
+import { runDiscovery } from './worker/discoveryJob';
+
+/**
+ * Engine assets ship with the repository, not the bundle.
+ *
+ * `ENGINE_DIR` overrides the location for a container image that lays them out
+ * differently; the default resolves from this file so a local run needs no
+ * configuration at all.
+ */
+const engineDir = process.env.ENGINE_DIR
+  ?? fileURLToPath(new URL('../../../engine', import.meta.url));
 
 /**
  * Process entry point.
@@ -62,7 +78,28 @@ async function main(): Promise<void> {
     new GcsBlobStore(gcp.GCS_BUCKET),
   );
 
-  const app = await buildServer({ repos, projects, verifier, logger: log });
+  const graph = new GraphService(repos);
+
+  // Rules and the provider registry are read once at startup: a ruleset that
+  // fails to parse should stop the process, not the first discovery run.
+  const engine = RuleEngine.fromFiles(
+    `${engineDir}/rulesets/pqc-migration-rules.yaml`,
+    `${engineDir}/rulesets/migration-execution-rules.yaml`,
+  );
+  loadRegistry(`${engineDir}/data/provider-capability.json`);
+  log.info({ engineDir, rules: engine.counts }, 'rulesets loaded');
+
+  const model = new GeminiClient(geminiConfig().GEMINI_MODEL, geminiConfig().GEMINI_API_KEY);
+
+  const app = await buildServer({
+    repos, projects, graph, verifier, logger: log,
+    // Deliberately not awaited: discovery outlives the request that starts it,
+    // and the client watches it over SSE rather than waiting on a response.
+    startDiscovery: (project) => {
+      void runDiscovery(project, { repos, projects, engine, model, logger: log })
+        .catch((e) => log.error({ err: e, projectId: project.projectId }, 'discovery job crashed'));
+    },
+  });
   await app.listen({ port: core.PORT, host: '0.0.0.0' });
   log.info(`listening on :${core.PORT}`);
 

@@ -42,6 +42,7 @@ describe('a baseline invariant carries a disposition', () => {
   });
 
   it('requires a disposition — it cannot be left implicit', () => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the point is what is left out
     const { disposition, ...withoutDisposition } = {
       ...base,
       kind: 'MESSAGE_FORMAT',

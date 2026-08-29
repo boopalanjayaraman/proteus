@@ -1,19 +1,25 @@
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
 import type { Logger } from '../config/logger';
+import type { Project } from '@proteus/schema';
 import type { Repositories } from '../core/repositories';
 import { installErrorHandler } from './errors';
 import { requireAuth, type TokenVerifier } from './middleware/auth';
 import { registerEventRoutes } from './routes/events';
 import { registerHealthRoutes } from './routes/health';
 import { registerMeRoutes } from './routes/me';
+import { registerGraphRoutes } from './routes/graph';
 import { registerProjectRoutes } from './routes/projects';
+import type { GraphService } from '../core/services/graph';
 import type { ProjectService } from '../core/services/projects';
 
 export interface ServerOptions {
   repos: Repositories;
   projects: ProjectService;
+  graph: GraphService;
   verifier: TokenVerifier;
   logger: Logger;
+  /** Kicks off discovery after a project is created. Absent in tests that do not clone. */
+  startDiscovery?: (project: Project) => void;
 }
 
 /**
@@ -43,7 +49,8 @@ export async function buildServer(opts: ServerOptions): Promise<FastifyInstance>
   await app.register(async (authed) => {
     authed.addHook('preHandler', requireAuth(opts.verifier));
     registerMeRoutes(authed, opts.repos);
-    registerProjectRoutes(authed, opts.repos, opts.projects);
+    registerProjectRoutes(authed, opts.repos, opts.projects, opts.startDiscovery);
+    registerGraphRoutes(authed, opts.repos, opts.graph);
     registerEventRoutes(authed, opts.repos);
   });
 

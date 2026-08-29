@@ -1,4 +1,4 @@
-import { CreateProjectInput, FileKind, REQUIRED_GITHUB_SCOPES, railProgress } from '@proteus/schema';
+import { CreateProjectInput, FileKind, REQUIRED_GITHUB_SCOPES, railProgress, type Project } from '@proteus/schema';
 import type { FastifyInstance } from 'fastify';
 import type { ProjectService, UploadedFile } from '../../core/services/projects';
 import type { Repositories } from '../../core/repositories';
@@ -50,6 +50,14 @@ export function registerProjectRoutes(
   app: FastifyInstance,
   repos: Repositories,
   service: ProjectService,
+  /**
+   * Starts discovery for a newly created project.
+   *
+   * Injected rather than imported so this layer never depends on `agent/`, and
+   * so a test can create a project without a clone. It returns immediately: the
+   * run outlives this request, and the client watches it over SSE.
+   */
+  startDiscovery?: (project: Project) => void,
 ): void {
   /** What the create screen must ask the user to grant (UX v1.2). */
   app.get('/projects/required-scopes', async () => ({ scopes: REQUIRED_GITHUB_SCOPES }));
@@ -79,6 +87,7 @@ export function registerProjectRoutes(
 
     const project = await service.create(user.uid, parsed.data, files);
     req.log.info({ projectId: project.projectId, files: files.length }, 'project created');
+    startDiscovery?.(project);
     return reply.status(201).send(present(project));
   });
 
