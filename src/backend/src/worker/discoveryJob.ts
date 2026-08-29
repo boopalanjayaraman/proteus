@@ -87,7 +87,7 @@ export async function runDiscovery(project: Project, deps: DiscoveryJobDeps): Pr
     // before the model is consulted at all.
     await discovery.advance(run, 'CORRELATING', 'Resolving ambiguous cryptographic usage');
     const excerptFor = (c: Candidate) => c.evidence.excerpt ?? c.matchedText;
-    const usages = await agent.resolveUsages(result.candidates, excerptFor);
+    const usages = await agent.resolveUsages(result.candidates, excerptFor, checkout.commitSha);
     for (const d of usages) {
       const evidenceId = await discovery.saveEvidence(project.projectId, d.evidence);
       await repos.events.emit(project.projectId, {

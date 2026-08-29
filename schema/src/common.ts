@@ -15,6 +15,25 @@ export const baseDocFields = {
   updatedAt: Timestamp,
 };
 
+/**
+ * Every non-safelisted header the browser sends to this API.
+ *
+ * Shared so the CORS allowlist and the client cannot drift. They did once: the
+ * SSE client sends `last-event-id`, the allowlist did not name it, and the
+ * browser blocked the preflight — so every screen worked except the live feed,
+ * which is the one thing the product is for.
+ *
+ * `accept` is absent on purpose: it is CORS-safelisted and needs no permission.
+ */
+export const CLIENT_HEADERS = [
+  'authorization',
+  'content-type',
+  /** Which screen the request came from (PRD-15). */
+  'x-proteus-screen',
+  /** The SSE resume cursor. Set by hand because fetch does not replay it. */
+  'last-event-id',
+] as const;
+
 export const Id = z.string().min(1).max(200);
 export const ProjectId = z.string().regex(/^PQC-\d{4,}$/, 'expected PQC-####');
 export const FirebaseUid = z.string().min(1);

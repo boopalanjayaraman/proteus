@@ -131,6 +131,21 @@ authorise autonomous work, so what it shows has to be exactly what will happen.
 | 2026-08-29 | `engine/rulesets/migration-execution-rules.yaml` | `EXEC-DISP-010`, `-011`, `-012`; 70 → 73 execution rules |
 | 2026-08-29 | `test/assessment.test.ts`, `test/api.test.ts` | 18 + 6 new cases |
 
+**Amendment — 2026-08-30: the gate opens before the report is written**
+
+`runAssessment` wrote the downloadable report and *then* opened the approval gate. A blob
+store that refused the write — a wrong quota project, a missing role — aborted the job two
+lines short of the gate, leaving the project at `ASSESSMENT_READY` for ever with a complete
+assessment nobody could act on.
+
+The report is an artifact; the gate is the product stopping to ask. Reordered so the gate
+opens first, and a failed report now emits a `WARN` event instead of ending the run — so
+its absence is visible on the screen that would have offered it, rather than silent. Two
+tests drive the real job with a blob store that refuses every write and assert the project
+still reaches `AWAITING_APPROVAL` with an open gate.
+
+See PRD-10 §11 for the matching change to when approval is offered.
+
 **Deviations from plan**
 
 The fixture exposed five real defects. Each is a case where the code and the ruleset

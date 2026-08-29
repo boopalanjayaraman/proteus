@@ -52,7 +52,23 @@ export class DiscoveryAgent {
    * model to second-guess a deterministic result is how a reproducible finding
    * becomes a variable one.
    */
-  async resolveUsages(candidates: Candidate[], excerptFor: (c: Candidate) => string): Promise<UsageDecision[]> {
+  /**
+   * `commitSha` is required, not optional.
+   *
+   * This flow assembles an evidence record, and a REPO locator without a commit
+   * is not a locator — a path and a line mean nothing without the revision they
+   * point into. It used to be filled with `''`, which the schema rejected at
+   * insert time, three layers away from the code that faked it and only once a
+   * candidate was weak enough to reach the model at all.
+   *
+   * Passed in rather than looked up: the checkout is the tool's fact to
+   * establish, and `agent/` has no way to reach it.
+   */
+  async resolveUsages(
+    candidates: Candidate[],
+    excerptFor: (c: Candidate) => string,
+    commitSha: string,
+  ): Promise<UsageDecision[]> {
     const weak = candidates.filter((c) => c.strength === 'WEAK' || c.usage === 'UNKNOWN');
     const decisions: UsageDecision[] = [];
 
@@ -87,7 +103,7 @@ export class DiscoveryAgent {
           evidenceClass: 'INFERRED',
           confidence: Math.min(output.confidence, 0.99),
           source: `${c.path}:${c.line}`,
-          locator: { kind: 'REPO', path: c.path, startLine: c.line, commitSha: '' },
+          locator: { kind: 'REPO', path: c.path, startLine: c.line, commitSha },
           excerpt: output.reasoning.slice(0, 2000),
         },
       });

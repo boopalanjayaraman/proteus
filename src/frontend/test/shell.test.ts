@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { EventStream } from '../src/api/stream';
 import { ApiClient, ApiClientError } from '../src/api/client';
+import { destinationFor } from '../src/screens/Projects';
 import {
   IMPACT_COLOR, IMPACT_LABEL, STAGE_LABEL, actionLabel, autonomyDisplay, elapsed, isLive,
 } from '../src/lib/impact';
@@ -222,5 +223,32 @@ describe('PRD-05 · the create screen never leaks the token into the bundle or t
     expect((created as unknown as { repository: { credential: { displayPrefix: string } } })
       .repository.credential.displayPrefix).toBe('github_pat_1');
     vi.unstubAllGlobals();
+  });
+});
+
+describe('a failed project is not a link', () => {
+  const p = (stage: string) =>
+    ({ stage, projectId: 'PQC-0184' } as Parameters<typeof destinationFor>[0]);
+
+  it('sends nowhere when the project failed', () => {
+    // Previously fell through to `default` and opened the sandbox screen, which
+    // is the least useful of the four for a project that produced nothing.
+    expect(destinationFor(p('FAILED'))).toBeNull();
+  });
+
+  it('still routes every stage that has something to show', () => {
+    expect(destinationFor(p('CREATED'))).toBe('/projects/PQC-0184/discovery');
+    expect(destinationFor(p('ANALYZING'))).toBe('/projects/PQC-0184/discovery');
+    expect(destinationFor(p('ASSESSMENT_READY'))).toBe('/projects/PQC-0184/assessment');
+    expect(destinationFor(p('AWAITING_APPROVAL'))).toBe('/projects/PQC-0184/assessment');
+    expect(destinationFor(p('MIGRATING'))).toBe('/projects/PQC-0184/migration');
+    expect(destinationFor(p('VERIFYING'))).toBe('/projects/PQC-0184/migration');
+    expect(destinationFor(p('SANDBOX_READY'))).toBe('/projects/PQC-0184/sandbox');
+    expect(destinationFor(p('COMPLETED'))).toBe('/projects/PQC-0184/sandbox');
+  });
+
+  it('leaves a project that needs a decision reachable', () => {
+    // NEEDS_HUMAN_ACTION is not a failure — there is something to go and do.
+    expect(destinationFor(p('NEEDS_HUMAN_ACTION'))).not.toBeNull();
   });
 });

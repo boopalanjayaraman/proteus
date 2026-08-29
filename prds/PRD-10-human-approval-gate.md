@@ -35,7 +35,7 @@ enough to audit the migration against it.
 - The disclosure, acknowledged and persisted
 - Approval pins `assessmentId` **and** `assessmentVersion`
 - `MigrationRun` created with branch name, lease and checkpoint
-- Stage transition `AWAITING_APPROVAL` → `MIGRATING`, guarded
+- Stage transition to `MIGRATING`, guarded, from either approvable stage (§11 amendment)
 - Assessment status → `APPROVED`; plan items marked approved
 - Confirmation modal per UX v1.2
 
@@ -58,7 +58,7 @@ enough to audit the migration against it.
 | FR-7 | Approval names the plan items authorised; unapproved items are excluded from execution | Spec §20 |
 | FR-8 | `summary.autonomy.approvals` increments; `humanEngineeringActions` does not | Data model §3.2 |
 | FR-9 | Before approval no branch exists and no write tool is reachable | Spec §6 |
-| FR-10 | Cancelling leaves the project in `AWAITING_APPROVAL` with no side effect | UX v1.2 |
+| FR-10 | Cancelling leaves the project in its approvable stage with no side effect | UX v1.2 |
 
 ## 5. Data model
 
@@ -170,6 +170,35 @@ whole repository — tests included — had been importing build artefacts that 
 only when someone had recently re-run `tsc`. The new disclosure export was `undefined` at
 runtime until they were deleted. Removed, gitignored, and guarded by an architecture test,
 because the failure mode is silent: the suite goes green either way. Recorded as TD-013.
+
+**Amendment — 2026-08-30: approval is offered from either approvable stage**
+
+FR-2 and the service both required `stage === 'AWAITING_APPROVAL'`, which the assessment
+job sets in the same breath as opening the gate. When an unrelated failure stopped that job
+two lines earlier — a blob write the gate does not depend on — the project stayed at
+`ASSESSMENT_READY`: assessment complete, findings written, plan proposed, and **no way for a
+human to authorise any of it.** The one control the product gives the user had disappeared,
+and nothing on the screen said why.
+
+That is the wrong shape for this increment's own claim. The migration is always a human
+decision, so the offer has to follow the *assessment*, not a bookkeeping transition that can
+fail independently of it.
+
+- `APPROVABLE_STAGES` (`schema/src/migration.ts`) names both `ASSESSMENT_READY` and
+  `AWAITING_APPROVAL`. Both mean the same thing to the person looking at the screen.
+- `ApprovalService.approve` accepts either, and `advanceProject` transitions from whichever
+  stage the project was actually in rather than a hardcoded one.
+- `approvalAvailability` (frontend) decides whether the bar appears, replacing an inline
+  stage comparison in the screen.
+- The gate is opened and resolved in the same breath when one does not exist — behaviour
+  `resolveGate` already had, and which this change finally reaches.
+- Discovery now navigates to the assessment on the *transition* to complete, never on
+  arrival: a finished project has `discoveryComplete` true from the first render, and
+  navigating on that would make the graph unreachable.
+
+Four backend and four frontend tests, including one that reproduces the exact state the
+blob failure left behind — `ASSESSMENT_READY` with the gate deleted — and asserts the
+approval still succeeds and still records consent.
 
 **Deferred** —
 

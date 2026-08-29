@@ -38,6 +38,9 @@ export async function sweepRotations(
     .find({
       'repository.credential.rotationDueAt': { $lte: now },
       'repository.credential.status': { $ne: 'REVOKED' },
+      // An archived project cannot act on a reminder and a deleted one has had
+      // its secret destroyed. Reminding about either is noise nobody can clear.
+      lifecycle: 'ACTIVE',
     } as never)
     .limit(200)
     .toArray() as unknown as Project[];

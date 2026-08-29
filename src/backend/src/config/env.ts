@@ -121,6 +121,17 @@ const Gemini = z
     GEMINI_MODEL: GeminiModel.default('gemini-3.5-flash'),
     GCP_PROJECT_ID: z.string().trim().optional(),
     GCP_REGION: nonEmpty.default('us-central1'),
+    /**
+     * Where Vertex serves the model, which is not where the rest of the estate
+     * lives.
+     *
+     * Newer Gemini models land on the `global` endpoint first and reach
+     * regional ones later — `gemini-3.5-flash` answers on `global` and 404s in
+     * us-central1, us-east5 and europe-west4. Tying the model's location to
+     * `GCP_REGION` would force a choice between the required model and having
+     * the bucket and builds nearby, which are unrelated decisions.
+     */
+    VERTEX_LOCATION: nonEmpty.default('global'),
   })
   .superRefine((v, ctx) => {
     // Two ways to reach Gemini, and exactly one must be configured.

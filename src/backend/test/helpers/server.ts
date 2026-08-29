@@ -8,6 +8,8 @@ import { AssessmentService } from '../../src/core/services/assessment';
 import { GraphService } from '../../src/core/services/graph';
 import { ProjectService } from '../../src/core/services/projects';
 import { InMemorySecretVault } from '../../src/integrations/secrets/vault';
+import { LifecycleService } from '../../src/core/services/lifecycle';
+import { ScriptedDeployer } from '../../src/integrations/cloudrun/sandbox';
 import { InMemoryBlobStore } from '../../src/integrations/storage/blobs';
 
 /**
@@ -36,6 +38,11 @@ export interface TestServer {
   graph: GraphService;
   assessments: AssessmentService;
   approvals: ApprovalService;
+  projectLifecycle: LifecycleService;
+  /** Exposed so a test can assert the sandbox was actually torn down. */
+  deployer: ScriptedDeployer;
+  /** Projects handed to discovery. Recorded rather than run — the job is heavy. */
+  discoveryStarts: string[];
   stop: () => Promise<void>;
 }
 
@@ -50,6 +57,9 @@ export async function startTestServer(
   const graph = new GraphService(repos);
   const assessments = new AssessmentService(repos);
   const approvals = new ApprovalService(repos);
+  const deployer = new ScriptedDeployer('https://sandbox.test');
+  const discoveryStarts: string[] = [];
+  const projectLifecycle = new LifecycleService(repos, vault, () => deployer);
 
   const app = await buildServer({
     repos,
@@ -60,6 +70,8 @@ export async function startTestServer(
     blobs,
     verifier: new StubVerifier(),
     logger: pino({ level: 'silent' }),
+    projectLifecycle,
+    startDiscovery: (project) => { discoveryStarts.push(project.projectId); },
     ...(opts.allowedOrigins ? { allowedOrigins: opts.allowedOrigins } : {}),
   });
   await app.listen({ port: 0, host: '127.0.0.1' });
@@ -68,6 +80,7 @@ export async function startTestServer(
   return {
     url: `http://127.0.0.1:${port}`,
     app, vault, blobs, projects, graph, assessments, approvals,
+    projectLifecycle, deployer, discoveryStarts,
     stop: () => app.close(),
   };
 }

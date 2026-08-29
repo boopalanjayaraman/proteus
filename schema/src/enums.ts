@@ -362,6 +362,9 @@ export type HumanGateType = z.infer<typeof HumanGateType>;
 
 export const EventType = z.enum([
   'PROJECT_CREATED',
+  'PROJECT_UPDATED',
+  'PROJECT_ARCHIVED',
+  'PROJECT_DELETED',
   'REPOSITORY_CLONED',
   'SOURCE_ANALYSIS_STARTED',
   'FILE_ANALYZED',

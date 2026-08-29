@@ -132,6 +132,33 @@ and the place where getting it wrong is least recoverable.
 | 2026-08-29 | `screens/{Projects,CreateProject}.tsx` | Landing tiles and the five-section create form |
 | 2026-08-29 | **Fixed `redactTokens` destroying every `Date`** | See below |
 
+**Amendment — 2026-08-30: projects can be edited**
+
+PRD-05 shipped create and delete and no way to change anything in between, so a wrong name
+or a revoked token meant starting over. PRD-17 recorded `PROJECT_UPDATED` and
+`TOKEN_REPLACED` as defined-but-unused for exactly this reason; they now have call sites.
+
+- `UpdateProjectInput` — name, default branch, instructions, and an optional replacement
+  token. `PATCH /projects/:id`.
+- **`repositoryUrl` is deliberately absent.** Every finding, graph node and piece of
+  evidence points into that repository at a commit, so changing it would orphan all of them
+  while looking like an edit. That is a new project, and project ids are cheap. The field
+  is not in the schema at all, so the request cannot be expressed.
+- **An omitted token leaves the stored one alone.** Supplied, it is stored as a **new secret
+  version** and the project repointed — the same write-once rule as creation, and the same
+  guarantee that no response and no document ever carries the value.
+- `POST /projects/:id/rediscover` re-runs discovery over the edited context, refused from
+  `MIGRATING` and `VERIFYING`: the baseline was captured against the findings that exist
+  now, and replacing them underneath a run would leave it executing a plan its evidence no
+  longer supports.
+
+Editing and re-running are separate acts on the screen as well as in the API, because they
+are separate decisions — changing the instructions is cheap and reversible, re-reading the
+repository is neither and supersedes the assessment on screen.
+
+The create screen serves both, rather than a second screen that would drift from it the
+first time either changed.
+
 **Deviations from plan**
 
 - **A real bug, found by AC-3.** `redactTokens` rebuilt every object through

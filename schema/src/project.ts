@@ -12,6 +12,31 @@ import {
 import { DiscoveryStage, FileKind, MigrationStage, ProjectStage } from './enums';
 
 /**
+ * A project's own life, independent of its migration's progress.
+ *
+ * Neither transition is reversible from the application: a restore path turns
+ * both into filters nobody trusts. A database write can still do it, and that
+ * should feel like a different kind of act.
+ */
+export const ProjectLifecycle = z.enum(['ACTIVE', 'ARCHIVED', 'DELETED']);
+export type ProjectLifecycle = z.infer<typeof ProjectLifecycle>;
+
+/** The only moves allowed. Absent from a key means terminal. */
+export const LIFECYCLE_TRANSITIONS: Record<ProjectLifecycle, ProjectLifecycle[]> = {
+  ACTIVE: ['ARCHIVED', 'DELETED'],
+  ARCHIVED: ['DELETED'],
+  DELETED: [],
+};
+
+export const canTransitionLifecycle = (
+  from: ProjectLifecycle | undefined,
+  to: ProjectLifecycle,
+): boolean =>
+  // `undefined` is treated as ACTIVE: documents written before this field
+  // existed read back without it, because Mongo reads bypass Zod's defaults.
+  (LIFECYCLE_TRANSITIONS[from ?? 'ACTIVE'] ?? []).includes(to);
+
+/**
  * Identity, the resumable project state root, and uploaded context.
  */
 
@@ -154,6 +179,43 @@ export function redactTokens<T>(value: T): T {
   return value;
 }
 
+/**
+ * What may be changed on an existing project.
+ *
+ * `repositoryUrl` is deliberately absent. Every finding, graph node and evidence
+ * record points into that repository at a commit, so changing it would orphan
+ * all of them while looking like an edit — that is a new project, and project
+ * ids are cheap.
+ *
+ * `githubToken` is optional here and required on create: an edit that does not
+ * mention the token leaves the stored one alone, and one that does adds a new
+ * secret version rather than overwriting the old (data model §3.2).
+ */
+export const UpdateProjectInput = z.object({
+  name: z.string().min(1).max(200).optional(),
+  defaultBranch: z.string().min(1).optional(),
+  instructions: z.string().max(20_000).optional(),
+  githubToken: z
+    .string()
+    .min(20)
+    .refine((t) => /^(gh[pousr]_|github_pat_)/.test(t), {
+      message: 'expected a GitHub token (ghp_… or github_pat_…)',
+    })
+    .optional(),
+});
+export type UpdateProjectInput = z.infer<typeof UpdateProjectInput>;
+
+/**
+ * Stages where re-running discovery is meaningful.
+ *
+ * Not while a migration is under way: the run holds a lease, its baseline was
+ * captured against the findings that exist now, and replacing them underneath it
+ * would leave a migration executing a plan its evidence no longer supports.
+ */
+export const REDISCOVERABLE_STAGES = [
+  'CREATED', 'ANALYZING', 'ASSESSMENT_READY', 'AWAITING_APPROVAL', 'FAILED',
+] as const;
+
 export const ProjectRepository = z.object({
   url: z.string().url(),
   provider: z.literal('GITHUB'),
@@ -220,6 +282,24 @@ export const Project = z.object({
 
   repository: ProjectRepository,
   instructions: z.string().max(20_000).optional(),
+
+  /**
+   * Where the project is in its own life — not how far the migration got.
+   *
+   * `stage` answers "did it complete?" and keeps answering it forever; this
+   * answers "may anyone touch it?". Deliberately not a ProjectStage value: an
+   * ARCHIVED stage would overwrite the outcome it replaced, and every
+   * `railProgress`, `STAGE_LABEL` and `STAGE_COLOR` lookup is total over the
+   * stage enum (D-022).
+   *
+   * One-way: ACTIVE → ARCHIVED → DELETED, or ACTIVE → DELETED.
+   */
+  lifecycle: ProjectLifecycle.default('ACTIVE'),
+  archivedAt: Timestamp.optional(),
+  archivedBy: FirebaseUid.optional(),
+  /** A soft delete. No row anywhere is removed; the project becomes invisible. */
+  deletedAt: Timestamp.optional(),
+  deletedBy: FirebaseUid.optional(),
 
   stage: ProjectStage,
   stageDetail: z.union([DiscoveryStage, MigrationStage]).optional(),

@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../app/AuthContext';
 import { useTheme } from '../../app/ThemeContext';
 import { STAGE_COLOR, STAGE_LABEL, autonomyDisplay, isLive, mix } from '../../lib/impact';
+import { screenAvailability, type ProjectScreen } from '../../lib/lifecycle';
 
 /**
  * The left rail — which in UX v1.3 is the whole chrome.
@@ -17,16 +18,25 @@ import { STAGE_COLOR, STAGE_LABEL, autonomyDisplay, isLive, mix } from '../../li
  * waiting on a decision. Project-scoped destinations are disabled until a
  * project is selected, so no route can be reached with nothing to show.
  */
-const DESTINATIONS = [
-  { to: '/projects', label: 'Projects', scoped: false },
-  { to: '/projects/new', label: 'Create project', scoped: false },
-  { to: 'discovery', label: 'Live discovery', scoped: true },
-  { to: 'assessment', label: 'Assessment', scoped: true },
-  { to: 'migration', label: 'Live migration', scoped: true },
-  { to: 'sandbox', label: 'Sandbox & report', scoped: true },
-  // Not project-scoped: the user's own history across every project, and a
-  // platform admin's across every user.
-  { to: '/activity', label: 'Activity', scoped: false },
+/**
+ * Everything that exists whether or not a project is selected.
+ *
+ * Above the separator, because they are how you get somewhere else — and
+ * `Projects` in particular must stay reachable without giving up the project you
+ * are working on.
+ */
+const GLOBAL = [
+  { to: '/projects', label: 'Projects', end: true },
+  { to: '/projects/new', label: 'Create project', end: false },
+  { to: '/activity', label: 'Activity', end: true },
+] as const;
+
+/** The selected project's own screens, in the order the work happens. */
+const SCOPED = [
+  { to: 'discovery', label: 'Live discovery' },
+  { to: 'assessment', label: 'Assessment' },
+  { to: 'migration', label: 'Live migration' },
+  { to: 'sandbox', label: 'Sandbox & report' },
 ] as const;
 
 export function Nav({ project }: { project?: Project | null }) {
@@ -54,9 +64,25 @@ export function Nav({ project }: { project?: Project | null }) {
           {theme === 'dark' ? 'LIGHT' : 'DARK'}
         </button>
       </div>
+      <div className="nav-items">
+        {GLOBAL.map((d) => (
+          <NavLink
+            key={d.to}
+            to={d.to}
+            end={d.end}
+            className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+          >
+            <span className="nav-dot" />
+            <span className="nav-label">{d.label}</span>
+          </NavLink>
+        ))}
+      </div>
 
-      {/* The selected project, so which one you are working on is answerable
-          without reading the breadcrumb. */}
+
+      {/* Below a rule, so the rail reads as "where you can go" and then "what
+          you are working on" rather than as one undifferentiated list. */}
+      <div className="nav-sep" />
+
       {project && (
         <div className="nav-project">
           <div className="nav-project-top">
@@ -72,18 +98,34 @@ export function Nav({ project }: { project?: Project | null }) {
           <div className="mono nav-project-repo">
             {project.repository.url.replace(/^https?:\/\/github\.com\//, '')}
           </div>
+          <NavLink className="mono nav-project-edit" to={`/projects/${project.projectId}/edit`}>
+            EDIT DETAILS
+          </NavLink>
         </div>
       )}
 
+      {/*
+        Always rendered, never conditionally present.
+        A menu whose items appear and disappear makes the product feel like it
+        is changing shape underneath you, and gives no clue that the screens
+        exist at all before a project is selected. They are shown and disabled,
+        each carrying the reason it cannot be opened yet.
+      */}
       <div className="nav-items">
-        {DESTINATIONS.map((d) => {
-          const disabled = d.scoped && !project;
-          const badge = badgeFor(d.to);
-          const path = d.scoped && project ? `/projects/${project.projectId}/${d.to}` : d.to;
+        {SCOPED.map((d) => {
+          const availability = project
+            ? screenAvailability(project, d.to as ProjectScreen)
+            : { enabled: false, reason: 'Select a project first.' };
+          const badge = project ? badgeFor(d.to) : null;
 
-          if (disabled) {
+          if (!availability.enabled) {
             return (
-              <span key={d.to} className="nav-item disabled" aria-disabled="true">
+              <span
+                key={d.to}
+                className="nav-item disabled"
+                aria-disabled="true"
+                title={availability.reason}
+              >
                 <span className="nav-dot" />
                 <span className="nav-label">{d.label}</span>
               </span>
@@ -92,7 +134,7 @@ export function Nav({ project }: { project?: Project | null }) {
           return (
             <NavLink
               key={d.to}
-              to={path}
+              to={`/projects/${project!.projectId}/${d.to}`}
               className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
             >
               <span className="nav-dot" />

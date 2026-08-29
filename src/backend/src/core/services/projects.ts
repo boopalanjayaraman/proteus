@@ -1,5 +1,6 @@
 import {
-  CREDENTIAL_ROTATION_DAYS, REQUIRED_GITHUB_SCOPES, gcsPath,
+
+  type UpdateProjectInput,  CREDENTIAL_ROTATION_DAYS, REQUIRED_GITHUB_SCOPES, gcsPath,
   type CreateProjectInput, type FileKind, type Project, type ProjectFile,
 } from '@proteus/schema';
 import { nextProjectId } from '../db/counters';
@@ -74,6 +75,7 @@ export class ProjectService {
         },
       },
       instructions: input.instructions,
+      lifecycle: 'ACTIVE',
       stage: 'CREATED',
       stageEnteredAt: now,
       actionRequired: false,
@@ -150,27 +152,89 @@ export class ProjectService {
   }
 
   /**
-   * Deletes a project and destroys its credential.
+   * Edits an existing project.
    *
-   * The secret goes last but must go: an orphaned secret is a live credential
-   * with nothing watching it.
+   * Returns what changed, so the caller can record it: an audit entry saying
+   * "the project was updated" is worth much less than one naming the fields.
+   *
+   * A replacement token adds a **new secret version** and repoints the project
+   * at it. The previous version is destroyed rather than left behind — an
+   * orphaned credential is a live token nobody is watching — but only after the
+   * new one is stored, so a failure mid-way leaves the working token in place.
    */
-  async delete(projectId: string): Promise<void> {
+  async update(
+    projectId: string,
+    input: UpdateProjectInput,
+  ): Promise<{ project: Project; changed: string[] }> {
     const project = await this.repos.projects.byId(projectId);
-    if (!project) return;
+    if (!project) throw new Error(`${projectId} not found`);
 
-    await this.blobs.deletePrefix(`projects/${projectId}/`);
-    await Promise.all(
-      Object.values({
-        files: this.repos.projectFiles.collection.deleteMany({ projectId } as never),
-        events: this.repos.events.collection.deleteMany({ projectId } as never),
-        project: this.repos.projects.collection.deleteOne({ projectId } as never),
-      }),
-    );
-    if (project.repository.credential) {
-      await this.vault.destroy(project.repository.credential.secretName);
+    const now = new Date();
+    const set: Record<string, unknown> = { updatedAt: now };
+    const changed: string[] = [];
+
+    if (input.name !== undefined && input.name !== project.name) {
+      set['name'] = input.name;
+      changed.push('name');
     }
+    if (input.defaultBranch !== undefined
+        && input.defaultBranch !== project.repository.defaultBranch) {
+      set['repository.defaultBranch'] = input.defaultBranch;
+      changed.push('defaultBranch');
+    }
+    if (input.instructions !== undefined && input.instructions !== project.instructions) {
+      set['instructions'] = input.instructions;
+      changed.push('instructions');
+    }
+
+    if (input.githubToken) {
+      const previous = project.repository.credential;
+      const secretName = previous?.secretName ?? githubSecretName(projectId);
+      const ref = await this.vault.store(secretName, input.githubToken);
+
+      set['repository.credential'] = {
+        secretName: ref.name,
+        secretVersion: ref.version,
+        displayPrefix: input.githubToken.slice(0, 12),
+        declaredScopes: [...REQUIRED_GITHUB_SCOPES],
+        status: 'STORED',
+        storedAt: now,
+        rotationDueAt: new Date(now.getTime() + CREDENTIAL_ROTATION_DAYS * 86_400_000),
+      };
+      changed.push('githubToken');
+    }
+
+    if (changed.length === 0) return { project, changed };
+
+    await this.repos.projects.collection.updateOne(
+      { projectId } as never,
+      { $set: set as never, $inc: { version: 1 } as never },
+    );
+
+    // The token is never in this event, only the reference — same rule as
+    // creation, and `redactTokens` backstops it at the write boundary.
+    await this.repos.events.emit(projectId, {
+      type: 'PROJECT_UPDATED', phase: 'SYSTEM', level: 'ACTIVITY', severity: 'INFO',
+      title: `Project updated — ${changed.join(', ')}`,
+      ...(changed.includes('githubToken')
+        ? { message: 'A new credential version was stored; the previous one is superseded.' }
+        : {}),
+      actor: 'USER', refs: {},
+    });
+
+    return { project: (await this.repos.projects.byId(projectId))!, changed };
   }
+
+  /**
+   * Deleting a project lives in `LifecycleService` (PRD-17).
+   *
+   * The hard delete that used to be here removed three of the model's
+   * twenty-four collections and never released the sandbox, so it orphaned
+   * eighteen collections and stranded a platform capacity slot every time it
+   * ran. Removed rather than deprecated: a partial delete that looks total is
+   * worse than none, and leaving it callable is how it gets called.
+   */
+
 
   /**
    * Fetches the token for a call, by pinned version.

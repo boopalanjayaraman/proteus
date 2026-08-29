@@ -5,6 +5,7 @@ import { ActivityFeed } from '../../components/activity/ActivityFeed';
 import { GraphCanvas } from '../../components/graph/GraphCanvas';
 import { Inspector } from '../../components/graph/Inspector';
 import { useAuth } from '../../app/AuthContext';
+import { NO_HANDOFF, handoff } from '../../lib/lifecycle';
 import { useProjectStream } from '../../hooks/useProjectStream';
 import { IMPACT_COLOR } from '../../lib/impact';
 
@@ -108,6 +109,20 @@ export function Discovery() {
     ? 100
     : Math.min(96, Math.round((nodes.length / Math.max(12, nodes.length + 4)) * 100));
   const done = Boolean(project?.summary.discoveryComplete);
+
+  /**
+   * Hands the user to the assessment the moment discovery finishes.
+   *
+   * The decision is `handoff` rather than an inline comparison, because it got
+   * this wrong once: the project loads asynchronously, so the first render of
+   * every visit has no project and looked exactly like a run in progress.
+   */
+  const handoffState = useRef(NO_HANDOFF);
+  useEffect(() => {
+    const result = handoff(handoffState.current, { loaded: Boolean(project), done });
+    handoffState.current = result.state;
+    if (result.navigate && id) navigate(`/projects/${id}/assessment`);
+  }, [project, done, id, navigate]);
 
   const stats = [
     { value: filesAnalyzed, label: 'FILES ANALYZED', fg: 'var(--fg)' },

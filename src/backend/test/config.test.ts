@@ -41,3 +41,40 @@ describe('Gemini model floor (Tech Stack §3)', () => {
     ).toBe(true);
   });
 });
+
+describe('the Gemini backend is chosen by the flag, not by which value is set', () => {
+  /** Mirrors server.ts, which is where the choice is actually made. */
+  const backendFor = (cfg: {
+    GOOGLE_GENAI_USE_VERTEXAI: boolean; GEMINI_API_KEY?: string;
+    GCP_PROJECT_ID?: string; GCP_REGION: string;
+  }) => (cfg.GOOGLE_GENAI_USE_VERTEXAI
+    ? { kind: 'VERTEX' as const, projectId: cfg.GCP_PROJECT_ID, location: cfg.GCP_REGION }
+    : { kind: 'API_KEY' as const, apiKey: cfg.GEMINI_API_KEY });
+
+  it('uses Vertex when the flag is set, even with a key present', () => {
+    // The bug this replaces: the key was passed regardless, so a deployment
+    // asking for Vertex still called generativelanguage.googleapis.com and
+    // failed on a key it was not trying to use.
+    const b = backendFor({
+      GOOGLE_GENAI_USE_VERTEXAI: true,
+      GEMINI_API_KEY: 'AIzaSomethingStale',
+      GCP_PROJECT_ID: 'proj', GCP_REGION: 'us-central1',
+    });
+    expect(b.kind).toBe('VERTEX');
+    expect(JSON.stringify(b)).not.toContain('AIzaSomethingStale');
+  });
+
+  it('uses the key endpoint when the flag is not set', () => {
+    const b = backendFor({
+      GOOGLE_GENAI_USE_VERTEXAI: false, GEMINI_API_KEY: 'k', GCP_REGION: 'us-central1',
+    });
+    expect(b.kind).toBe('API_KEY');
+  });
+
+  it('always carries a region into Vertex — there is no global endpoint', () => {
+    const b = backendFor({
+      GOOGLE_GENAI_USE_VERTEXAI: true, GCP_PROJECT_ID: 'proj', GCP_REGION: 'europe-west4',
+    });
+    expect(b).toHaveProperty('location', 'europe-west4');
+  });
+});

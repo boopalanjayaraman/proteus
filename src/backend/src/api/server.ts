@@ -1,5 +1,6 @@
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
+import { CLIENT_HEADERS } from '@proteus/schema';
 import type { Logger } from '../config/logger';
 import type { Project, SandboxDeployment } from '@proteus/schema';
 import type { Repositories } from '../core/repositories';
@@ -24,6 +25,7 @@ import type { AssessmentService } from '../core/services/assessment';
 import type { GraphService } from '../core/services/graph';
 import type { BlobStore } from '../integrations/storage/blobs';
 import type { ProjectService } from '../core/services/projects';
+import type { LifecycleService } from '../core/services/lifecycle';
 
 export interface ServerOptions {
   repos: Repositories;
@@ -52,6 +54,8 @@ export interface ServerOptions {
   }>;
   /** User activity. PRD-15 supplies it; constructed here when absent. */
   activity?: ActivityRecorder;
+  /** Archive and soft delete of a PROJECT — distinct from the sandbox one above. */
+  projectLifecycle?: LifecycleService;
   /**
    * Browser origins allowed to call this API. Empty disables CORS entirely,
    * which is what the tests want — they call the server directly, and a
@@ -97,7 +101,9 @@ export async function buildServer(opts: ServerOptions): Promise<FastifyInstance>
       methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
       // The screen header PRD-15 added is a custom header, so a preflight will
       // ask about it by name and fail if it is not listed.
-      allowedHeaders: ['authorization', 'content-type', 'x-proteus-screen'],
+      // From the shared list, not written out again — an omission here does
+      // not fail loudly, it just makes one request silently impossible.
+      allowedHeaders: [...CLIENT_HEADERS],
       maxAge: 3600,
     });
   }
@@ -119,7 +125,10 @@ export async function buildServer(opts: ServerOptions): Promise<FastifyInstance>
     registerActivityRoutes(authed, opts.repos, activity);
     registerMeRoutes(authed, opts.repos, activity);
     registerMaintenanceRoutes(authed, opts.repos, opts.sandboxSweep);
-    registerProjectRoutes(authed, opts.repos, opts.projects, opts.startDiscovery, activity);
+    registerProjectRoutes(
+      authed, opts.repos, opts.projects, opts.startDiscovery, activity,
+      opts.projectLifecycle,
+    );
     registerGraphRoutes(authed, opts.repos, opts.graph);
     registerAssessmentRoutes(
       authed, opts.repos, opts.assessments, opts.blobs, opts.regenerateAssessment, activity,

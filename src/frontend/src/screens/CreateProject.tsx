@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
+import type { Project } from '@proteus/schema';
 import { useAuth } from '../app/AuthContext';
 
 interface Attachment {
@@ -28,7 +29,17 @@ const fmtSize = (b: number) =>
 export function CreateProject() {
   const { api } = useAuth();
   const navigate = useNavigate();
+  /**
+   * One screen, two jobs.
+   *
+   * Editing shows the same fields in the same order, because the thing being
+   * described is the same thing — a second screen would drift from this one the
+   * first time either changed.
+   */
+  const { id: editingId } = useParams<{ id: string }>();
+  const editing = Boolean(editingId);
 
+  const [loaded, setLoaded] = useState<Project | null>(null);
   const [name, setName] = useState('');
   const [repositoryUrl, setRepositoryUrl] = useState('');
   const [githubToken, setGithubToken] = useState('');
@@ -37,10 +48,24 @@ export function CreateProject() {
   const [findings, setFindings] = useState<Attachment[]>([]);
   const [scopes, setScopes] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [rerun, setRerun] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Served by the backend so the screen cannot drift from what is actually required.
   useEffect(() => { api.requiredScopes().then((r) => setScopes(r.scopes)).catch(() => undefined); }, [api]);
+
+  // Fills the form from the project being edited. The token is absent by
+  // design — it is never returned, so the field starts empty and an empty field
+  // means "leave the stored one alone".
+  useEffect(() => {
+    if (!editingId) return;
+    api.project(editingId).then((p) => {
+      setLoaded(p);
+      setName(p.name);
+      setRepositoryUrl(p.repository.url);
+      setInstructions(p.instructions ?? '');
+    }).catch((e) => setError((e as Error).message));
+  }, [api, editingId]);
 
   const addFiles = async (
     files: FileList | null,
@@ -61,6 +86,27 @@ export function CreateProject() {
     setBusy(true);
     setError(null);
     try {
+      if (editingId) {
+        await api.updateProject(editingId, {
+          name,
+          instructions,
+          // Only sent when the user typed one. An empty field is "leave it",
+          // not "clear it" — there is no way to have no credential.
+          ...(githubToken ? { githubToken } : {}),
+        });
+        // `sizeBytes` is the screen's own bookkeeping; the endpoint takes bytes.
+        for (const f of [...hardware, ...findings]) {
+          await api.uploadFile(editingId, {
+            kind: f.kind, originalName: f.originalName,
+            mimeType: f.mimeType, contentBase64: f.contentBase64,
+          });
+        }
+        setGithubToken('');
+        if (rerun) await api.rediscover(editingId);
+        navigate(`/projects/${editingId}/${rerun ? 'discovery' : 'assessment'}`);
+        return;
+      }
+
       const project = await api.createProject({
         name, repositoryUrl, githubToken,
         instructions: instructions || undefined,
@@ -84,10 +130,13 @@ export function CreateProject() {
     <form className="create" onSubmit={submit}>
       <div className="create-form">
         <div className="create-head">
-          <h1>Create migration project</h1>
+          <h1>{editing ? `Edit ${loaded?.projectId ?? 'project'}` : 'Create migration project'}</h1>
           <p className="create-lede">
-            Everything you provide becomes the context the agent reasons over.
-            Nothing is modified at this stage.
+            {editing
+              ? 'Change the context the agent reasons over. Nothing already discovered is '
+                + 'altered until you re-run the analysis.'
+              : 'Everything you provide becomes the context the agent reasons over. '
+                + 'Nothing is modified at this stage.'}
           </p>
         </div>
 
@@ -100,10 +149,19 @@ export function CreateProject() {
           </div>
           <div className="field">
             <label htmlFor="repo">Repository URL</label>
+            {/* Not editable on an existing project: every finding, graph node and
+                piece of evidence points into this repository at a commit, so
+                changing it would orphan all of them while looking like an edit. */}
             <input id="repo" required type="url" value={repositoryUrl}
+                   disabled={editing} readOnly={editing}
                    onChange={(e) => setRepositoryUrl(e.target.value)}
                    placeholder="https://github.com/northwind-pay/payments-api" />
-            <div className="mono field-note">READ-ONLY UNTIL MIGRATION IS APPROVED</div>
+            <div className="mono field-note">
+              {editing
+                ? 'FIXED FOR THE LIFE OF THE PROJECT — EVERY FINDING POINTS INTO IT. '
+                  + 'POINT PROTEUS AT A DIFFERENT REPOSITORY BY CREATING A NEW PROJECT.'
+                : 'READ-ONLY UNTIL MIGRATION IS APPROVED'}
+            </div>
           </div>
         </section>
 
@@ -113,9 +171,12 @@ export function CreateProject() {
             <label htmlFor="pat">GitHub fine-grained personal access token</label>
             {/* A password field: the value is a live credential and must not be
                 shoulder-readable or captured by a screen recording. */}
-            <input id="pat" required type="password" autoComplete="off" spellCheck={false}
+            <input id="pat" required={!editing} type="password" autoComplete="off"
+                   spellCheck={false}
                    value={githubToken} onChange={(e) => setGithubToken(e.target.value)}
-                   placeholder="github_pat_…" />
+                   placeholder={editing
+                     ? `${loaded?.repository.credential?.displayPrefix ?? 'github_pat_'}… — leave blank to keep`
+                     : 'github_pat_…'} />
             {masked && (
               <div className="field-echo">
                 <span className="mono field-echo-value">{masked}</span>
@@ -123,8 +184,11 @@ export function CreateProject() {
               </div>
             )}
             <div className="mono field-note">
-              SCOPED TO THIS REPOSITORY · NEVER RETURNED TO THE BROWSER ·
-              ROTATION REMINDER 90 DAYS
+              {editing
+                ? 'LEAVE BLANK TO KEEP THE STORED TOKEN. A NEW ONE IS STORED AS A NEW '
+                  + 'SECRET VERSION · NEVER RETURNED TO THE BROWSER'
+                : 'SCOPED TO THIS REPOSITORY · NEVER RETURNED TO THE BROWSER · '
+                  + 'ROTATION REMINDER 90 DAYS'}
             </div>
           </div>
           {scopes.length > 0 && (
@@ -157,11 +221,35 @@ export function CreateProject() {
 
         {error && <div className="error">{error}</div>}
 
+        {/* Re-running is a separate decision from editing: changing the
+            instructions is cheap and reversible, re-reading the repository is
+            neither, and it supersedes the assessment already on screen. */}
+        {editing && (
+          <label className="rerun">
+            <input type="checkbox" checked={rerun}
+                   onChange={(e) => setRerun(e.target.checked)} />
+            <span>
+              Re-run the analysis with these changes
+              <span className="rerun-note">
+                Discovery reads the repository again and produces a new assessment.
+                The current one is superseded.
+              </span>
+            </span>
+          </label>
+        )}
+
         <div className="create-foot">
           <button className="primary compact" type="submit" disabled={busy}>
-            {busy ? 'Creating…' : 'Create project & start discovery'}
+            {busy
+              ? 'Saving…'
+              : editing
+                ? (rerun ? 'Save & re-run analysis' : 'Save changes')
+                : 'Create project & start discovery'}
           </button>
-          <button className="linkish" type="button" onClick={() => navigate('/projects')}>
+          <button
+            className="linkish" type="button"
+            onClick={() => navigate(editing ? `/projects/${editingId}/assessment` : '/projects')}
+          >
             Cancel
           </button>
         </div>

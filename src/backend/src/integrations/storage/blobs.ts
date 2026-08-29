@@ -29,9 +29,30 @@ export const sha256 = (data: Buffer): string =>
   createHash('sha256').update(data).digest('hex');
 
 export class GcsBlobStore implements BlobStore {
-  private readonly storage = new Storage();
+  private readonly storage: Storage;
 
-  constructor(private readonly bucketName: string) {}
+  /**
+   * `projectId` is the billing project for every request, and it has to be set
+   * here rather than inherited.
+   *
+   * Google's client libraries take the `x-goog-user-project` header from the
+   * `quota_project_id` in the application-default credentials file — whatever
+   * project happened to be current the last time someone ran `gcloud auth
+   * application-default login`. If that is a different project, GCS answers
+   * "User project specified in the request is invalid", which names neither the
+   * project it objected to nor where it got it from.
+   *
+   * Neither `new Storage({ projectId })` nor `clientOptions.quotaProjectId`
+   * overrides it; only the environment variable does. So the app states its own
+   * project instead of depending on a machine's gcloud state — which is also
+   * what makes a developer's laptop behave like Cloud Run.
+   */
+  constructor(private readonly bucketName: string, projectId?: string) {
+    if (projectId && !process.env['GOOGLE_CLOUD_QUOTA_PROJECT']) {
+      process.env['GOOGLE_CLOUD_QUOTA_PROJECT'] = projectId;
+    }
+    this.storage = new Storage(projectId ? { projectId } : {});
+  }
 
   private file(path: string) {
     return this.storage.bucket(this.bucketName).file(path);

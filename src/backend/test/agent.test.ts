@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { Evidence } from '@proteus/schema';
+import { Evidence, EvidenceLocator } from '@proteus/schema';
 import { DiscoveryAgent, usageEvent } from '../src/agent/flows/discovery';
 import { ModelOutputError, ScriptedModel } from '../src/agent/model';
 import { READ_ONLY_TOOL_NAMES, WRITE_TOOL_NAMES, isWriteTool } from '../src/agent/tools/registry';
@@ -10,6 +10,9 @@ import { WorkingCopy } from '../src/core/discovery/workingCopy';
 import { RuleEngine } from '../src/core/rules/engine';
 import { DiscoveryService, stageProgress } from '../src/core/services/discovery';
 import { aProject, clearAll, startTestDb, type TestDb } from './helpers/mongo';
+
+/** A real 40-character sha, because the locator schema requires >= 7. */
+const SHA = 'a'.repeat(40);
 
 /** PRD-07 acceptance criteria. */
 
@@ -65,7 +68,7 @@ describe('AC-2 · deterministic detection runs before the agent', () => {
       };
     }
     const decided = await new DiscoveryAgent(new ScriptedModel(answers))
-      .resolveUsages(candidates, () => 'code');
+      .resolveUsages(candidates, () => 'code', SHA);
 
     expect(decided.every((d) => d.candidate.strength === 'WEAK' || d.candidate.usage === 'UNKNOWN'))
       .toBe(true);
@@ -84,7 +87,7 @@ describe('AC-3 · the model can never claim to have observed anything', () => {
     }));
     const [d] = await agent.resolveUsages(
       [{ path: 'x.java', line: 1, strength: 'WEAK', usage: 'UNKNOWN' } as never],
-      () => 'code',
+      () => 'code', SHA,
     );
     expect(d!.evidence.evidenceClass).toBe('INFERRED');
     // Even when the model claims 1.0, it is capped — INFERRED cannot be certain.
@@ -108,7 +111,7 @@ describe('AC-3 · the model can never claim to have observed anything', () => {
       'resolve-usage:x.java:1': { usage: 'NOT_A_USAGE' },
     }));
     await expect(
-      agent.resolveUsages([{ path: 'x.java', line: 1, strength: 'WEAK', usage: 'UNKNOWN' } as never], () => 'c'),
+      agent.resolveUsages([{ path: 'x.java', line: 1, strength: 'WEAK', usage: 'UNKNOWN' } as never], () => 'c', SHA),
     ).rejects.toThrow(ModelOutputError);
   });
 });
@@ -122,7 +125,7 @@ describe('AC-4 · UNKNOWN is a permitted answer', () => {
       },
     }));
     const [d] = await agent.resolveUsages(
-      [{ path: 'x.java', line: 1, strength: 'WEAK', usage: 'UNKNOWN' } as never], () => 'c',
+      [{ path: 'x.java', line: 1, strength: 'WEAK', usage: 'UNKNOWN' } as never], () => 'c', SHA,
     );
     expect(d!.usage).toBe('UNKNOWN');
     // An undetermined usage belongs in the audit drawer, not the live feed.
@@ -137,7 +140,7 @@ describe('AC-4 · UNKNOWN is a permitted answer', () => {
       },
     }));
     const [d] = await agent.resolveUsages(
-      [{ path: 'x.java', line: 1, strength: 'WEAK', usage: 'UNKNOWN' } as never], () => 'c',
+      [{ path: 'x.java', line: 1, strength: 'WEAK', usage: 'UNKNOWN' } as never], () => 'c', SHA,
     );
     expect(usageEvent(d!).level).toBe('ACTIVITY');
   });
@@ -259,5 +262,40 @@ describe('AC-9 · completion hands over to assessment', () => {
     const done = events.find((e) => e.type === 'ASSESSMENT_COMPLETED');
     expect(done).toBeDefined();
     expect(done!.level).toBe('MILESTONE');
+  });
+});
+
+describe('evidence carries the revision it points into', () => {
+  /**
+   * The locator used to be built with `commitSha: ''`.
+   *
+   * A path and a line mean nothing without the revision they point into, and
+   * the schema requires at least seven characters — so this failed at insert,
+   * three layers away from the code that faked it, and only once a candidate
+   * was weak enough to reach the model at all. Every earlier run classified
+   * everything strongly and never got here.
+   */
+  const resolve = () => new DiscoveryAgent(new ScriptedModel({
+    'resolve-usage:pay/Crypto.java:48': {
+      candidateId: 'c1', usage: 'KEY_TRANSPORT',
+      reasoning: 'wraps an AES session key', confidence: 0.9,
+    },
+  })).resolveUsages(
+    [{ path: 'pay/Crypto.java', line: 48, strength: 'WEAK', usage: 'UNKNOWN' } as never],
+    () => 'code',
+    SHA,
+  );
+
+  it('stamps the commit the scan actually ran against', async () => {
+    const [d] = await resolve();
+    expect(d!.evidence.locator).toMatchObject({
+      kind: 'REPO', path: 'pay/Crypto.java', startLine: 48, commitSha: SHA,
+    });
+  });
+
+  it('produces a locator the schema accepts', async () => {
+    const [d] = await resolve();
+    // The check that would have caught this at the source rather than at insert.
+    expect(() => EvidenceLocator.parse(d!.evidence.locator)).not.toThrow();
   });
 });

@@ -5,7 +5,8 @@ import { useAuth } from '../../app/AuthContext';
 import { ApiClientError } from '../../api/client';
 import { ApproveModal } from '../../components/approval/ApproveModal';
 import { FindingCard } from '../../components/findings/FindingCard';
-import { approvalErrorMessage, approvalRequest, approvalSubtitle, scopeOf } from '../../lib/approval';
+import { approvalErrorMessage, approvalRequest, approvalSubtitle, scopeOf, approvalAvailability,
+} from '../../lib/approval';
 import { mix } from '../../lib/impact';
 
 /**
@@ -100,6 +101,11 @@ export function Assessment() {
 
   const { assessment, findings, recommendations } = data;
   const scope = scopeOf(assessment);
+  // The migration is always a human decision, so the bar follows the assessment
+  // rather than a single stage value (see `approvalAvailability`).
+  const approval = project
+    ? approvalAvailability(project, assessment)
+    : { offer: false, enabled: false };
   const autonomousItems = scope.autonomous;
   const report = artifacts.find((a) => a.kind === 'ASSESSMENT_REPORT');
 
@@ -271,7 +277,7 @@ export function Assessment() {
         )}
       </aside>
 
-      {project?.stage === 'AWAITING_APPROVAL' && (
+      {approval.offer && (
         <div className="approve-bar">
           <div>
             <div className="approve-title">Approve the proposed migration scope</div>
@@ -281,12 +287,8 @@ export function Assessment() {
           </div>
           <button
             className="primary compact"
-            disabled={!scope.approvable}
-            title={
-              scope.approvable
-                ? undefined
-                : 'Nothing in this repository is inside the autonomy boundary.'
-            }
+            disabled={!approval.enabled}
+            title={approval.reason}
             onClick={() => { setApprovalError(null); setConfirming(true); }}
           >
             Approve migration →

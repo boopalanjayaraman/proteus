@@ -670,4 +670,116 @@ decisions:
       migration feed that `events` exists to stream.
     decided_on: 2026-08-29
     revised_on: 2026-08-29
+  - id: D-022
+    title: A lifecycle field beside stage, and a soft delete instead of a hard one
+    category: product
+    status: ACCEPTED
+    raised: 2026-08-29
+    blocks: [PRD-17]
+    context: >
+      A project can be created and worked but never finished with. Archiving does not
+      exist, so a reviewed migration stays indefinitely mutable. The delete that does
+      exist removes three of the model's twenty-four collections plus the credential and
+      the blobs, leaving eighteen collections of rows pointing at a projectId that no
+      longer resolves.
+
+      It also never tears down the sandbox, and the leak is asymmetric: capacity counts
+      live deployments globally for the platform total but attributes them per user by
+      joining back through projects. A deleted project's deployment therefore consumes one
+      of the thirty platform slots permanently while counting against nobody's three.
+    options:
+      - One destructive action gated on the platform admin role
+      - Archive for owners, hard delete across all 24 collections for admins
+      - Archive for owners, soft delete for admins, both on a lifecycle field
+    recommendation: Archive for owners and soft delete for admins, on a lifecycle field.
+    impact_if_unresolved: >
+      A database accumulating unreachable rows, and a platform that silently stops
+      retaining sandboxes after thirty deletions with no project on any screen to explain
+      why.
+    decision: >
+      A `lifecycle` field on Project — ACTIVE, ARCHIVED, DELETED — separate from `stage`
+      and never overlapping it. Stage records how far the migration got and keeps
+      answering that forever; lifecycle records whether anyone may touch the project. An
+      ARCHIVED stage value would overwrite an outcome with a filing decision and force a
+      special case through every railProgress, STAGE_LABEL and STAGE_COLOR lookup, all of
+      which are total over the stage enum.
+
+      Delete is a SOFT delete. Nothing is removed from any collection; the project's
+      lifecycle becomes DELETED and it disappears from the product. This was chosen over
+      a complete hard delete because deleting one project across twenty-four collections
+      is twenty-four chances to miss one and the current code already misses eighteen,
+      while setting one field cannot partially fail. Project ids come from a monotonic
+      counter and are never reused, so a deleted PQC-0184 can never collide with a later
+      project — which is what makes the references safe rather than merely tidy.
+
+      Two things are still destroyed rather than hidden. The GitHub token: a hidden
+      project holding a live credential is a token nobody is watching on a project nobody
+      can see. And the sandbox: a hidden project holding a public Cloud Run URL and one of
+      thirty platform slots is the bug this decision exists to fix.
+
+      Invisibility is enforced at two functions — ProjectRepository.byId and
+      listForOwner — because they are the only reads in the backend that surface a
+      project; everything else is an updateOne scoped by a projectId the caller already
+      holds. Three reads sit outside that path and are handled explicitly: the rotation
+      sweep, the sandbox capacity attribution, and the sandbox reclaim sweep.
+
+      Neither transition is reversible from the application, which was the stated
+      requirement. A restore path turns both into filters nobody trusts. A database write
+      can still do it, and that should feel like a different kind of act.
+    decided_on: 2026-08-29
+  - id: D-023
+    title: Which endpoint serves Gemini, and how the schema reaches it
+    category: technical
+    status: ACCEPTED
+    raised: 2026-08-30
+    blocks: []
+    context: >
+      A GEMINI_API_KEY was refused with API_KEY_SERVICE_BLOCKED. Diagnosing it
+      surfaced three defects stacked on each other.
+
+      GOOGLE_GENAI_USE_VERTEXAI had never done anything: the config validated the
+      Vertex-versus-key choice carefully, then server.ts passed the API key
+      regardless, so a deployment asking for Vertex still called
+      generativelanguage.googleapis.com and failed on a key it was not trying to use.
+      No Vertex plugin was installed at all.
+
+      Vertex then answered, but gemini-3.5-flash 404s in us-central1, us-east5 and
+      europe-west4 and answers only on the `global` location — which
+      `@genkit-ai/vertexai` refuses to accept, naming `@genkit-ai/google-genai` as
+      its replacement.
+
+      And the schema never reached the model. Genkit 1.41 is built against Zod 3;
+      this project is on Zod 4. Passing a Zod 4 schema does not throw — it converts
+      to nothing, so the model received no response schema and answered with field
+      names it invented. Every test passed throughout, because they all use a
+      scripted model.
+    options:
+      - Fix the API key restriction in the console and leave the code alone
+      - Honour the flag, move to the successor plugin, convert the schema explicitly
+    recommendation: Honour the flag and convert the schema explicitly.
+    impact_if_unresolved: >
+      A configuration flag that silently means nothing, and structured output that
+      has never once been exercised against a real model.
+    decision: >
+      The flag decides the endpoint. GOOGLE_GENAI_USE_VERTEXAI=true builds a VERTEX
+      backend that carries no API key anywhere in its branch and authenticates with
+      application-default credentials; false builds an API_KEY backend. The backend
+      is a discriminated union, so a key cannot be passed to Vertex by accident, and
+      the choice is logged at startup.
+
+      VERTEX_LOCATION is separate from GCP_REGION and defaults to `global`. Newer
+      Gemini models land on the global endpoint first and reach regional ones later,
+      so tying them would force a choice between the model the product requires and
+      keeping the bucket and builds nearby — unrelated decisions.
+
+      Both backends come from @genkit-ai/google-genai; @genkit-ai/vertexai and
+      @genkit-ai/googleai are removed. The older Vertex plugin cannot use `global`
+      and says so itself.
+
+      The Zod schema is converted with z.toJSONSchema(schema, {target: draft-7}) and
+      passed as output.jsonSchema rather than handed over as a Zod object. The
+      post-parse against the original schema stays: the conversion makes the model
+      likely to comply, it does not make it trustworthy. TD-009 described the type
+      mismatch as cosmetic; it was not.
+    decided_on: 2026-08-30
 ```

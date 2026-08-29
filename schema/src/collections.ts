@@ -54,7 +54,10 @@ export const INDEXES: Record<CollectionName, IndexSpec[]> = {
   [COLLECTIONS.projects]: [
     { name: 'projectId_unique', key: { projectId: 1 }, unique: true },
     // The landing screen: this user's projects, most recently active first.
-    { name: 'owner_activity', key: { ownerId: 1, 'summary.lastActivityAt': -1 } },
+    // `lifecycle` leads the sort key because the list always excludes deleted
+    // projects — filtering after the sort would read rows only to drop them.
+    { name: 'owner_lifecycle_activity',
+      key: { ownerId: 1, lifecycle: 1, 'summary.lastActivityAt': -1 } },
     { name: 'owner_stage', key: { ownerId: 1, stage: 1 } },
   ],
 

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CREDENTIAL_ROTATION_DAYS, REQUIRED_GITHUB_SCOPES } from '@proteus/schema';
-import { clearAll, startTestDb, type TestDb } from './helpers/mongo';
+import { aProject, clearAll, startTestDb, type TestDb } from './helpers/mongo';
 import { authFor, startTestServer, type TestServer } from './helpers/server';
 
 /** PRD-05 acceptance criteria. */
@@ -128,23 +128,38 @@ describe('AC-4 · a vault failure leaves nothing behind', () => {
   });
 });
 
-describe('AC-5 · deleting a project destroys its credential', () => {
-  it('removes the secret, the files and the events', async () => {
+/**
+ * AC-5, as PRD-17 rewrote it.
+ *
+ * PRD-05 gave the owner a hard delete. That is superseded (D-022): delete is a
+ * platform admin's soft delete, and the owner's action is now archive. The
+ * half of AC-5 that survives unchanged is the one that mattered — the
+ * credential is destroyed, not hidden.
+ *
+ * The full behaviour is covered in `lifecycle.test.ts`; this asserts the
+ * boundary PRD-05 owned, which is that an owner can no longer delete.
+ */
+describe('AC-5 · the owner can no longer delete (superseded by PRD-17)', () => {
+  it('refuses an owner without the platform admin role', async () => {
     const { body } = await create({ ...createBody(), files: [
       { kind: 'HSM_SPEC', originalName: 'spec.pdf', mimeType: 'application/pdf',
         contentBase64: Buffer.from('hsm specification').toString('base64') },
     ] } as never);
 
     expect(s.vault.names).toHaveLength(1);
-    expect(s.blobs.paths.length).toBeGreaterThan(0);
 
     const r = await fetch(`${s.url}/projects/${body.projectId}`, {
-      method: 'DELETE', headers: authFor(OWNER),
+      method: 'DELETE',
+      headers: { ...authFor(OWNER), 'content-type': 'application/json' },
+      body: JSON.stringify({ confirm: body.projectId }),
     });
-    expect(r.status).toBe(204);
-    expect(s.vault.names).toHaveLength(0);
-    expect(s.blobs.paths).toHaveLength(0);
-    expect(await t.repos.projects.byId(body.projectId)).toBeNull();
+    // 404 rather than 403: a 403 would confirm the action exists and is worth
+    // probing for.
+    expect(r.status).toBe(404);
+    // Nothing happened. The credential and the blobs are untouched.
+    expect(s.vault.names).toHaveLength(1);
+    expect(s.blobs.paths.length).toBeGreaterThan(0);
+    expect(await t.repos.projects.byId(body.projectId)).not.toBeNull();
   });
 });
 
@@ -236,5 +251,149 @@ describe('FR-11 · project ids', () => {
     await fetch(`${s.url}/projects/${a.body.projectId}`, { method: 'DELETE', headers: authFor(OWNER) });
     const c = await create();
     expect(c.body.projectId).not.toBe(a.body.projectId);
+  });
+});
+
+describe('a job that dies leaves a project that says so', () => {
+  it('marks a project failed from whatever stage it was passing through', async () => {
+    // The guarded `transition` only moved ANALYZING -> FAILED, so a clone that
+    // failed while the project was still CREATED silently did nothing and left
+    // it looking like it was still working.
+    const created = await t.repos.projects.create(aProject({
+      ownerId: OWNER, stage: 'CREATED',
+    }) as never);
+
+    await t.repos.projects.markFailed(created.projectId, 'could not clone: bad credentials');
+
+    const after = await t.repos.projects.byId(created.projectId);
+    expect(after?.stage).toBe('FAILED');
+    expect(after?.failureReason).toBe('could not clone: bad credentials');
+    // The reason has to reach the tile, which reads the summary line.
+    expect(after?.summary.lastActivityText).toContain('could not clone');
+  });
+
+  it('clears actionRequired — a dead project is not waiting on anybody', async () => {
+    const created = await t.repos.projects.create(aProject({
+      ownerId: OWNER, stage: 'ANALYZING', actionRequired: true,
+    }) as never);
+    await t.repos.projects.markFailed(created.projectId, 'boom');
+    expect((await t.repos.projects.byId(created.projectId))?.actionRequired).toBe(false);
+  });
+
+  it('truncates a reason rather than rejecting the write', async () => {
+    // A stack trace from a crashed job is the common case, and losing the
+    // failure entirely because the message was long is the wrong trade.
+    const created = await t.repos.projects.create(aProject({ ownerId: OWNER }) as never);
+    await t.repos.projects.markFailed(created.projectId, 'x'.repeat(5000));
+    const after = await t.repos.projects.byId(created.projectId);
+    expect(after?.stage).toBe('FAILED');
+    expect(after?.failureReason?.length).toBe(2000);
+  });
+});
+
+describe('editing an existing project', () => {
+  const patch = (projectId: string, body: unknown) =>
+    fetch(`${s.url}/projects/${projectId}`, {
+      method: 'PATCH',
+      headers: { ...authFor(OWNER), 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('changes what it was asked to and reports which fields moved', async () => {
+    const { body } = await create();
+    const res = await patch(body.projectId, {
+      name: 'Renamed', instructions: 'Prefer ML-KEM-768.',
+    });
+    expect(res.status).toBe(200);
+
+    const after = await t.repos.projects.byId(body.projectId);
+    expect(after?.name).toBe('Renamed');
+    expect(after?.instructions).toBe('Prefer ML-KEM-768.');
+    // The event names the fields — "the project was updated" is worth much less.
+    const events = await t.repos.events.find({ projectId: body.projectId } as never);
+    const updated = events.find((e) => e.type === 'PROJECT_UPDATED');
+    expect(updated?.title).toContain('name');
+    expect(updated?.title).toContain('instructions');
+  });
+
+  it('cannot change the repository, because every finding points into it', async () => {
+    const { body } = await create();
+    await patch(body.projectId, { repositoryUrl: 'https://github.com/someone/else' });
+    const after = await t.repos.projects.byId(body.projectId);
+    // Ignored rather than rejected: the field is simply not in the input schema,
+    // so there is no way to express the request at all.
+    expect(after?.repository.url).toBe(body.repository.url);
+  });
+
+  it('leaves the stored credential alone when no token is sent', async () => {
+    const { body } = await create();
+    const before = (await t.repos.projects.byId(body.projectId))!.repository.credential;
+    await patch(body.projectId, { name: 'Just a rename' });
+    const after = (await t.repos.projects.byId(body.projectId))!.repository.credential;
+    expect(after?.secretVersion).toBe(before?.secretVersion);
+  });
+
+  it('stores a replacement token as a new version, and never returns it', async () => {
+    const { body } = await create();
+    const before = (await t.repos.projects.byId(body.projectId))!.repository.credential;
+
+    const replacement = `github_pat_${'b'.repeat(30)}`;
+    const res = await patch(body.projectId, { githubToken: replacement });
+    expect(res.status).toBe(200);
+    expect(await res.text()).not.toContain(replacement);
+
+    const after = (await t.repos.projects.byId(body.projectId))!.repository.credential;
+    expect(after?.secretVersion).not.toBe(before?.secretVersion);
+    expect(after?.displayPrefix).toBe(replacement.slice(0, 12));
+
+    // The rule that holds everywhere: no document anywhere carries the value.
+    for (const c of await t.repos.db.listCollections().toArray()) {
+      const docs = await t.repos.db.collection(c.name).find({}).toArray();
+      expect(JSON.stringify(docs), c.name).not.toContain(replacement);
+    }
+  });
+
+  it('refuses a token that is not a GitHub token, naming the field only', async () => {
+    const { body } = await create();
+    const res = await patch(body.projectId, { githubToken: 'not-a-token-but-long-enough-x' });
+    expect(res.status).toBe(400);
+    expect(await res.text()).not.toContain('not-a-token');
+  });
+});
+
+describe('re-running discovery', () => {
+  const rediscover = (projectId: string) =>
+    fetch(`${s.url}/projects/${projectId}/rediscover`, {
+      method: 'POST',
+      headers: { ...authFor(OWNER), 'content-type': 'application/json' },
+      body: '{}',
+    });
+
+  it('restarts analysis from a finished assessment', async () => {
+    const { body } = await create();
+    await t.repos.projects.collection.updateOne(
+      { projectId: body.projectId } as never,
+      { $set: { stage: 'ASSESSMENT_READY', 'summary.discoveryComplete': true } as never },
+    );
+
+    expect((await rediscover(body.projectId)).status).toBe(202);
+    // The job is actually handed the project, not merely acknowledged.
+    expect(s.discoveryStarts).toContain(body.projectId);
+    const after = await t.repos.projects.byId(body.projectId);
+    expect(after?.stage).toBe('ANALYZING');
+    // The flag drives the nav and the hand-off banner; leaving it true would
+    // show "discovery complete" over a run that had just restarted.
+    expect(after?.summary.discoveryComplete).toBe(false);
+  });
+
+  it('refuses while a migration is under way', async () => {
+    const { body } = await create();
+    await t.repos.projects.collection.updateOne(
+      { projectId: body.projectId } as never, { $set: { stage: 'MIGRATING' } as never },
+    );
+    const res = await rediscover(body.projectId);
+    // The baseline was captured against the findings that exist now.
+    expect(res.status).toBe(409);
+    expect(await res.text()).toContain('baseline');
   });
 });

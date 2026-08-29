@@ -117,6 +117,30 @@ see for eight increments.
 | 2026-08-29 | `components/layout/{Header,Nav}.tsx`, `screens/{Login,Placeholder}.tsx`, `app/App.tsx` | The shell and six routes |
 | 2026-08-29 | `test/shell.test.ts` | 12 acceptance tests |
 
+**Amendment — 2026-08-30: the rail is grouped, and the selection outlives the route**
+
+Three problems, all of them the rail behaving as a list of links rather than as the
+product's chrome.
+
+**The selection was cleared by visiting the project list.** `useRouteProject` read the id
+from the path, so `/projects` meant "no project" — making the list the one screen from
+which you could not get back to what you were doing. Going there is how you *pick* a
+project, not how you abandon one. The selection now changes only when another project is
+opened, and clears only on sign-out or when the selected project stops existing.
+
+**The rail was one undifferentiated list.** Now two groups separated by a rule: where you
+can go (Projects, Create project, Activity), then what you are working on (the project
+card, then its four screens).
+
+**Project screens appeared and disappeared.** They were rendered only when a project was
+selected, so the rail changed shape underneath the user and gave no clue the screens
+existed at all. They are now always present and disabled when unreachable, each carrying
+its reason — "Select a project first", "Available once discovery finishes".
+
+Availability itself is `screenAvailability` (PRD-17's `lib/lifecycle.ts`), stated once: a
+page that has done its job stays available for ever, and one whose work has not started
+says so rather than rendering empty panels.
+
 **Deviations from plan**
 
 - **`EventSource` is not used.** It cannot send an `Authorization` header, and the stream

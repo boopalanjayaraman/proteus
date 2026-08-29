@@ -31,6 +31,19 @@ export function screenForPath(pathname: string): Screen | undefined {
   }
 }
 
+/**
+ * The project id in a path, or nothing.
+ *
+ * The shell needs this and cannot use `useParams`: it renders `<Routes>` as a
+ * child, so it sits outside every route that declares `:id` and `useParams`
+ * returns an empty object there. The consequence was quiet — the sidebar never
+ * knew which project was open, so its project card never appeared and every
+ * project-scoped nav item stayed disabled.
+ */
+export function projectIdFromPath(pathname: string): string | undefined {
+  return /^\/projects\/(PQC-\d{4,})(?:\/|$)/.exec(pathname)?.[1];
+}
+
 export const CATEGORY_LABEL: Record<ActivityCategory, string> = {
   AUTH: 'Account',
   PROJECT: 'Projects',

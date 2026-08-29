@@ -1,8 +1,10 @@
 import {
+  APPROVABLE_STAGES,
   AUTONOMOUS_PLAN_MODES,
   MIGRATION_DISCLOSURE_TEXT,
   type Assessment,
   type PlanItem,
+  type Project,
 } from '@proteus/schema';
 
 /**
@@ -46,6 +48,37 @@ export function scopeOf(assessment: Assessment): ApprovalScope {
     // Nothing inside the boundary means there is nothing to authorise. Offering
     // the button anyway would create a migration run with no work in it.
     approvable: autonomous.length > 0 && assessment.status === 'READY',
+  };
+}
+
+/**
+ * Whether to offer the approval, and why not when we do not.
+ *
+ * The migration is always a human decision — the product's entire claim is one
+ * approval and no engineering interventions. So the bar appears whenever there
+ * is a current assessment nobody has authorised yet, in either stage that means
+ * "finished, waiting on you".
+ *
+ * It used to render only at `AWAITING_APPROVAL`. A project whose assessment
+ * completed but whose gate never opened showed a finished assessment with no way
+ * to act on it, and the one control the user has was gone.
+ */
+export function approvalAvailability(
+  project: Pick<Project, 'stage' | 'summary'>,
+  assessment: Assessment,
+): { offer: boolean; enabled: boolean; reason?: string } {
+  if (project.summary.migrationApproved) return { offer: false, enabled: false };
+  if (!(APPROVABLE_STAGES as readonly string[]).includes(project.stage)) {
+    return { offer: false, enabled: false };
+  }
+
+  const scope = scopeOf(assessment);
+  return {
+    offer: true,
+    enabled: scope.approvable,
+    ...(scope.approvable
+      ? {}
+      : { reason: 'Nothing in this repository is inside the autonomy boundary.' }),
   };
 }
 

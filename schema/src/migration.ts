@@ -84,6 +84,21 @@ export const MIGRATION_UNTOUCHED_STATEMENT =
   + 'boundary is crossed.';
 
 /** The two answers to the approval gate. Modelled so the audit record names one. */
+/**
+ * The stages from which a human may authorise the migration.
+ *
+ * Both mean the same thing to the person looking at the screen: the assessment
+ * is finished and nothing proceeds without them. `AWAITING_APPROVAL` is the
+ * stage the assessment job moves to when it opens the gate; `ASSESSMENT_READY`
+ * is where a project sits if that step did not run — which it did not, once,
+ * because an unrelated blob write failed two lines earlier.
+ *
+ * Approving is the product's one human decision. Making it depend on a single
+ * bookkeeping transition means a hiccup anywhere in that transition removes the
+ * only control the user has.
+ */
+export const APPROVABLE_STAGES = ['ASSESSMENT_READY', 'AWAITING_APPROVAL'] as const;
+
 export const APPROVE_OPTION_ID = 'APPROVE';
 export const DECLINE_OPTION_ID = 'DECLINE';
 

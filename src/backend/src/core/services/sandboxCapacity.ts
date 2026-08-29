@@ -77,6 +77,9 @@ export class SandboxCapacityService {
     const owned = projectIds.length === 0
       ? []
       : (await this.repos.projects.collection
+          // Deliberately includes archived and deleted projects. A deployment
+          // that is still live counts against its owner whatever happened to
+          // the project — dropping it here is the leak PRD-17 exists to fix.
           .find({ projectId: { $in: projectIds }, ownerId } as never)
           .toArray() as unknown as Project[]).map((p) => p.projectId);
 

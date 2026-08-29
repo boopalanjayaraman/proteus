@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { aProject, anEvent, clearAll, startTestDb, type TestDb } from './helpers/mongo';
 import { authFor, readStream, startTestServer, type TestServer } from './helpers/server';
+import { CLIENT_HEADERS } from '@proteus/schema';
 
 /** PRD-03 acceptance criteria, against a real server and a real replica set. */
 
@@ -504,21 +505,41 @@ describe('every project-scoped route is owned, and evidence is fetchable', () =>
 });
 
 describe('CORS — the frontend is never the same origin', () => {
-  it('answers a preflight for the allowed origin, naming the headers the app sends', async () => {
+  it('allows every header the client actually sends', async () => {
     const s = await startTestServer(t.repos, { allowedOrigins: ['https://proteus.example'] });
     const res = await fetch(`${s.url}/projects`, {
       method: 'OPTIONS',
       headers: {
         origin: 'https://proteus.example',
         'access-control-request-method': 'GET',
-        'access-control-request-headers': 'authorization,x-proteus-screen',
+        'access-control-request-headers': CLIENT_HEADERS.join(','),
       },
     });
     expect(res.status).toBeLessThan(300);
     expect(res.headers.get('access-control-allow-origin')).toBe('https://proteus.example');
-    // The screen header is custom, so a preflight asks about it by name.
-    expect(res.headers.get('access-control-allow-headers')?.toLowerCase())
-      .toContain('x-proteus-screen');
+
+    // Enumerated from the shared list rather than spelled out, so a header added
+    // to the client is covered here without anyone remembering. `last-event-id`
+    // was missing once, and the only casualty was the live feed — every other
+    // screen worked, so nothing looked broken except the thing the product is for.
+    const allowed = (res.headers.get('access-control-allow-headers') ?? '').toLowerCase();
+    for (const h of CLIENT_HEADERS) expect(allowed, h).toContain(h);
+    await s.stop();
+  });
+
+  it('allows a preflight for the SSE stream, which carries the resume cursor', async () => {
+    const s = await startTestServer(t.repos, { allowedOrigins: ['https://proteus.example'] });
+    const res = await fetch(`${s.url}/projects/PQC-0001/stream`, {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://proteus.example',
+        'access-control-request-method': 'GET',
+        'access-control-request-headers': 'authorization,last-event-id',
+      },
+    });
+    expect(res.status).toBeLessThan(300);
+    expect((res.headers.get('access-control-allow-headers') ?? '').toLowerCase())
+      .toContain('last-event-id');
     await s.stop();
   });
 

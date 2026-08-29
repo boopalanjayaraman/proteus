@@ -2,6 +2,7 @@ import { MongoClient } from 'mongodb';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import { __setHandle } from '../../src/core/db/client';
 import { ensureIndexes } from '../../src/core/db/indexes';
+import { runBackfills } from '../../src/core/db/migrations';
 import { Repositories } from '../../src/core/repositories';
 
 /**
@@ -25,6 +26,7 @@ export async function startTestDb(): Promise<TestDb> {
 
   __setHandle({ client, db, supportsChangeStreams: true });
   await ensureIndexes(db);
+  await runBackfills(db);
 
   return {
     repos: new Repositories(db),

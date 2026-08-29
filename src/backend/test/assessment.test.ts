@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import pino from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Finding } from '@proteus/schema';
 import { ScriptedModel } from '../src/agent/model';
@@ -17,6 +18,8 @@ import { DiscoveryService } from '../src/core/services/discovery';
 import { DispositionService } from '../src/core/services/dispositions';
 import { GraphService } from '../src/core/services/graph';
 import { AssessmentService, PlanValidationError, validatePlan } from '../src/core/services/assessment';
+import { ApprovalService } from '../src/core/services/approval';
+import { runAssessment } from '../src/worker/assessmentJob';
 import { buildPolicy, ensurePolicy } from '../src/core/services/policy';
 import { buildSnapshot, renderMarkdown, REQUIRED_SECTIONS } from '../src/reports/assessment';
 import { aProject, clearAll, startTestDb, type TestDb } from './helpers/mongo';
@@ -379,5 +382,82 @@ describe('the migration policy is derived from the rules, not written by hand', 
     expect(await ensurePolicy(db.repos, engine)).toBe('policy_mlkem_v1');
     expect(await ensurePolicy(db.repos, engine)).toBe('policy_mlkem_v1');
     expect(await db.repos.migrationPolicies.count({} as never)).toBe(1);
+  });
+});
+
+describe('the gate does not depend on the report being stored', () => {
+  /**
+   * The report used to be written before the gate opened.
+   *
+   * A bucket that rejected the write — a wrong quota project, a missing role —
+   * left the project at ASSESSMENT_READY for ever: the assessment existed, the
+   * findings existed, and the product never asked the question it exists to
+   * ask. The screen showed a finished assessment with no way to approve it.
+   */
+
+  /** Scripted answers built from the findings discovery actually produced. */
+  async function scriptedFor(projectId: string) {
+    const findings = await db.repos.findings.find({ projectId } as never, 200);
+    return new ScriptedModel({
+      'assessment-narratives': {
+        narratives: findings.map((f) => ({
+          findingId: f.findingId,
+          title: f.title,
+          summaryLine: 'summary',
+          description: 'description',
+          agentIntent: 'no modification, and here is why',
+        })),
+      },
+      // An empty plan keeps this test about the ordering rather than about
+      // plan validation, which has its own tests above.
+      'assessment-plan': { planItems: [] },
+      'assessment-recommendations': { recommendations: [] },
+      'assessment-summary': {
+        headline: 'headline', whatExists: 'exists', whatIsVulnerable: 'vulnerable',
+        whatAgentWillChange: 'nothing', whatAgentWillNotChange: 'the hardware',
+      },
+    });
+  }
+
+  const refusingBlobs = (message: string) => ({
+    put: () => Promise.reject(new Error(message)),
+    get: () => Promise.reject(new Error(message)),
+    delete: () => Promise.resolve(),
+    deletePrefix: () => Promise.resolve(0),
+  });
+
+  async function runWithFailingStore(message: string) {
+    const projectId = await discoveredProject();
+    const project = (await db.repos.projects.byId(projectId))!;
+    await db.repos.projects.transition(projectId, project.stage, 'ASSESSMENT_READY')
+      .catch(() => undefined);
+
+    await runAssessment((await db.repos.projects.byId(projectId))!, {
+      repos: db.repos,
+      engine,
+      model: await scriptedFor(projectId),
+      blobs: refusingBlobs(message) as never,
+      approvals: new ApprovalService(db.repos),
+      logger: pino({ level: 'silent' }),
+    });
+    return projectId;
+  }
+
+  it('opens the gate even when the blob store refuses the write', async () => {
+    const projectId = await runWithFailingStore(
+      'User project specified in the request is invalid.',
+    );
+
+    expect((await db.repos.projects.byId(projectId))?.stage).toBe('AWAITING_APPROVAL');
+    const gates = await db.repos.humanGates.find({ projectId } as never);
+    expect(gates.some((g) => g.type === 'MIGRATION_APPROVAL' && g.status === 'OPEN')).toBe(true);
+  });
+
+  it('says so rather than failing silently', async () => {
+    const projectId = await runWithFailingStore('bucket unavailable');
+    const events = await db.repos.events.collection
+      .find({ projectId } as never).toArray() as unknown as Array<{ title: string }>;
+    // The report's absence has to be visible on the screen that would offer it.
+    expect(events.some((e) => e.title.includes('report could not be stored'))).toBe(true);
   });
 });

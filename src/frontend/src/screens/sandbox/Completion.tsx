@@ -2,13 +2,14 @@ import type {
   Artifact, MigrationRun, Project, Recommendation, SandboxDeployment, VerificationResult,
 } from '@proteus/schema';
 import { useCallback, useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../app/AuthContext';
 import { mix } from '../../lib/impact';
 import {
   OUTCOME_COLOR, OUTCOME_LABEL, STATUS_COLOR, artifactCards, capacityNotice, checkRows,
   expiryLabel, outcomeTiles, sandboxCard, type CapacityState,
 } from '../../lib/migration';
+import { screenAvailability } from '../../lib/lifecycle';
 
 /**
  * Screen 4b — sandbox and report.
@@ -75,6 +76,22 @@ export function Completion() {
     );
   }
   if (!project) return <div className="label">Loading…</div>;
+
+  // The nav disables this screen before a migration completes; a typed URL does
+  // not go through the nav, so the same rule is stated here rather than letting
+  // the page render empty panels that read as a broken screen.
+  const reachable = screenAvailability(project, 'sandbox');
+  if (!reachable.enabled) {
+    return (
+      <div className="placeholder">
+        <h2>No migration has run yet</h2>
+        <p className="sub">{reachable.reason}</p>
+        <Link className="primary compact" to={`/projects/${project.projectId}/assessment`}>
+          Go to the assessment
+        </Link>
+      </div>
+    );
+  }
 
   const outcome = run?.outcome ?? (verification?.overall === 'VERIFIED'
     ? 'VERIFIED' : 'HUMAN_ACTION_REQUIRED');

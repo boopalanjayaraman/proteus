@@ -1,7 +1,7 @@
 import type { UserActivity } from '@proteus/schema';
 import { describe, expect, it } from 'vitest';
 import {
-  CATEGORY_ORDER, appendPage, emptyMessage, isFiltered, rowsFrom, screenForPath, toQuery,
+  CATEGORY_ORDER, appendPage, emptyMessage, isFiltered, rowsFrom, screenForPath, toQuery, projectIdFromPath,
 } from '../src/lib/activity';
 
 /**
@@ -168,5 +168,28 @@ describe('category ordering', () => {
     // Most of the rows, least of the meaning.
     expect(CATEGORY_ORDER.at(-1)).toBe('NAVIGATION');
     expect(CATEGORY_ORDER[0]).toBe('MIGRATION');
+  });
+});
+
+describe('projectIdFromPath', () => {
+  it('finds the id on every project-scoped route', () => {
+    for (const screen of ['discovery', 'assessment', 'migration', 'sandbox']) {
+      expect(projectIdFromPath(`/projects/PQC-0006/${screen}`)).toBe('PQC-0006');
+    }
+    expect(projectIdFromPath('/projects/PQC-0184')).toBe('PQC-0184');
+  });
+
+  it('returns nothing where there is no project', () => {
+    // `/projects/new` is a route, not a project — matching it would make the
+    // sidebar try to load a project called "new".
+    expect(projectIdFromPath('/projects')).toBeUndefined();
+    expect(projectIdFromPath('/projects/new')).toBeUndefined();
+    expect(projectIdFromPath('/activity')).toBeUndefined();
+    expect(projectIdFromPath('/')).toBeUndefined();
+  });
+
+  it('requires the id to look like a project id', () => {
+    expect(projectIdFromPath('/projects/PQC-12/discovery')).toBeUndefined();
+    expect(projectIdFromPath('/projects/notaproject/discovery')).toBeUndefined();
   });
 });

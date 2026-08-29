@@ -1,6 +1,9 @@
 import { genkit, type GenkitBeta } from 'genkit/beta';
-import { googleAI } from '@genkit-ai/googleai';
-import type { z } from 'zod';
+// Both backends from one package. The older `@genkit-ai/vertexai` refuses the
+// `global` location, which is the only place newer Gemini models are served —
+// the plugin says so itself and names this package as the replacement.
+import { googleAI, vertexAI } from '@genkit-ai/google-genai';
+import { z } from 'zod';
 
 /**
  * The model, behind an interface.
@@ -33,10 +36,46 @@ export interface ModelClient {
   readonly modelName: string;
 }
 
+/**
+ * Where the model is reached, and how it authenticates.
+ *
+ * `API_KEY`  → generativelanguage.googleapis.com with a Gemini API key.
+ * `VERTEX`   → Vertex AI in a GCP project, with application-default credentials
+ *              and no key at all.
+ *
+ * The two are genuinely different endpoints with different auth, quotas and
+ * model ids. `GOOGLE_GENAI_USE_VERTEXAI` chose between them in configuration
+ * long before anything here honoured it — the key was passed regardless, so a
+ * deployment that asked for Vertex still called the API-key endpoint and failed
+ * on the key rather than on anything it had configured.
+ */
+export type ModelBackend =
+  | { kind: 'API_KEY'; apiKey?: string }
+  /** Vertex requires a region; there is no global endpoint to fall back to. */
+  | { kind: 'VERTEX'; projectId?: string; location: string };
+
 export class GeminiClient implements ModelClient {
   private readonly ai: GenkitBeta;
+  readonly backend: ModelBackend['kind'];
 
-  constructor(readonly modelName: string, apiKey?: string) {
+  constructor(readonly modelName: string, backend: ModelBackend) {
+    this.backend = backend.kind;
+
+    if (backend.kind === 'VERTEX') {
+      // No API key anywhere in this branch: Vertex authenticates with the
+      // service account Cloud Run attaches, or with `gcloud auth
+      // application-default login` locally.
+      this.ai = genkit({
+        plugins: [vertexAI({
+          location: backend.location,
+          ...(backend.projectId ? { projectId: backend.projectId } : {}),
+        })],
+        model: vertexAI.model(modelName),
+      });
+      return;
+    }
+
+    const apiKey = backend.kind === 'API_KEY' ? backend.apiKey : undefined;
     this.ai = genkit({
       plugins: [googleAI(apiKey ? { apiKey } : {})],
       model: googleAI.model(modelName),
@@ -48,14 +87,25 @@ export class GeminiClient implements ModelClient {
   ): Promise<StructuredResponse<z.infer<S>>> {
     const started = Date.now();
 
-    // Genkit 1.41 is typed against Zod 3 and this project is on Zod 4; the
-    // runtime shapes are compatible but the types are not. The cast is confined
-    // to this line, and the parse below is the authoritative check regardless —
-    // Genkit's coercion is a convenience, our schema is the contract. See TD-009.
+    /**
+     * The schema is converted here rather than handed over as a Zod object.
+     *
+     * Genkit 1.41 is typed and built against Zod 3, and this project is on
+     * Zod 4. Passing a Zod 4 schema does not throw — it silently converts to
+     * nothing, so the model receives no response schema at all and answers with
+     * whatever field names it likes. Against a scripted model that is invisible,
+     * which is why every test passed while this was broken.
+     *
+     * `z.toJSONSchema` produces the constraint the model is actually given.
+     * The parse below is still the authoritative check: this makes the model
+     * likely to comply, it does not make it trustworthy (TD-009).
+     */
+    const jsonSchema = z.toJSONSchema(req.schema, { target: 'draft-7' });
+
     const result = await this.ai.generate({
       system: req.system,
       prompt: req.prompt,
-      output: { schema: req.schema as unknown as Parameters<typeof this.ai.generate>[0] extends { output?: { schema?: infer T } } ? T : never },
+      output: { jsonSchema },
     });
 
     const output = result.output as z.infer<S> | null;

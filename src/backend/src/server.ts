@@ -8,9 +8,11 @@ import { buildServer } from './api/server';
 import { FirebaseTokenVerifier, type TokenVerifier } from './api/middleware/auth';
 import { changeStreamsAvailable, connect, disconnect, redactUri } from './core/db/client';
 import { ensureIndexes } from './core/db/indexes';
+import { runBackfills } from './core/db/migrations';
 import { Repositories } from './core/repositories';
 import { ActivityRecorder } from './core/services/activity';
 import { ApprovalService } from './core/services/approval';
+import { LifecycleService } from './core/services/lifecycle';
 import { AssessmentService } from './core/services/assessment';
 import { GraphService } from './core/services/graph';
 import { ProjectService } from './core/services/projects';
@@ -56,6 +58,10 @@ async function main(): Promise<void> {
 
   const { db } = await connect(core.MONGODB_URI, core.MONGODB_DB);
   const indexes = await ensureIndexes(db);
+  // Fields added to a schema apply to writes immediately and to existing
+  // documents never — reads bypass Zod. Backfilled at boot, before anything
+  // serves a request against a document that predates the field.
+  const backfilled = await runBackfills(db);
   const repos = new Repositories(db);
 
   const features = configuredFeatures();
@@ -64,6 +70,7 @@ async function main(): Promise<void> {
       mongo: redactUri(core.MONGODB_URI),
       database: core.MONGODB_DB,
       indexes: `${indexes.created} across ${indexes.collections} collections`,
+      backfilled,
       changeStreams: changeStreamsAvailable(),
       features,
       build: `${process.env.BUILD_EXECUTOR ?? 'LOCAL'}`,
@@ -90,7 +97,7 @@ async function main(): Promise<void> {
   }
 
   const gcp = gcpConfig();
-  const blobs = new GcsBlobStore(gcp.GCS_BUCKET);
+  const blobs = new GcsBlobStore(gcp.GCS_BUCKET, gcp.GCP_PROJECT_ID);
   const projects = new ProjectService(repos, new GcpSecretVault(gcp.GCP_PROJECT_ID), blobs);
 
   const graph = new GraphService(repos);
@@ -104,7 +111,23 @@ async function main(): Promise<void> {
   loadRegistry(`${engineDir}/data/provider-capability.json`);
   log.info({ engineDir, rules: engine.counts }, 'rulesets loaded');
 
-  const model = new GeminiClient(geminiConfig().GEMINI_MODEL, geminiConfig().GEMINI_API_KEY);
+  // The flag decides the endpoint, not just the validation. Passing the key
+  // regardless is what made GOOGLE_GENAI_USE_VERTEXAI=true still call the
+  // API-key endpoint, and fail on a key the deployment was not using.
+  const gem = geminiConfig();
+  const model = new GeminiClient(
+    gem.GEMINI_MODEL,
+    gem.GOOGLE_GENAI_USE_VERTEXAI
+      ? { kind: 'VERTEX', projectId: gem.GCP_PROJECT_ID, location: gem.VERTEX_LOCATION }
+      : { kind: 'API_KEY', apiKey: gem.GEMINI_API_KEY },
+  );
+  log.info(
+    { backend: model.backend, model: gem.GEMINI_MODEL,
+      ...(gem.GOOGLE_GENAI_USE_VERTEXAI ? { location: gem.VERTEX_LOCATION } : {}) },
+    model.backend === 'VERTEX'
+      ? 'Gemini via Vertex AI — application-default credentials, no API key'
+      : 'Gemini via the API-key endpoint',
+  );
   const assessments = new AssessmentService(repos);
   const approvals = new ApprovalService(repos);
 
@@ -193,11 +216,17 @@ async function main(): Promise<void> {
     log.info({ allowedOrigins }, 'CORS origins allowed');
   }
 
+  // Archive and soft delete. Shares the vault and the deployer resolver, because
+  // both actions have to destroy a credential and release a sandbox.
+  const projectLifecycle = new LifecycleService(
+    repos, new GcpSecretVault(gcp.GCP_PROJECT_ID), deployerFor,
+  );
+
   const github = new GitHubReader();
 
   const app = await buildServer({
     repos, projects, graph, assessments, approvals, blobs, verifier, logger: log,
-    activity, allowedOrigins,
+    activity, allowedOrigins, projectLifecycle,
     // Deliberately not awaited, for the same reason discovery is not: the
     // migration outlives the request that approved it.
     startMigration: (projectId, migrationRunId) => {
@@ -234,7 +263,16 @@ async function main(): Promise<void> {
       void runDiscovery(project, {
         repos, projects, engine, model, logger: log,
         onComplete: (p) => assess(p.projectId),
-      }).catch((e) => log.error({ err: e, projectId: project.projectId }, 'discovery job crashed'));
+      }).catch(async (e) => {
+        log.error({ err: e, projectId: project.projectId }, 'discovery job crashed');
+        // A crash outside the job's own error handling — before a run exists,
+        // or after it released its lease. Without this the project sits in
+        // CREATED or ANALYZING for ever and the screen waits on a stream that
+        // will never produce another event.
+        await repos.projects
+          .markFailed(project.projectId, e instanceof Error ? e.message : String(e))
+          .catch(() => undefined);
+      });
     },
   });
   await app.listen({ port: core.PORT, host: '0.0.0.0' });

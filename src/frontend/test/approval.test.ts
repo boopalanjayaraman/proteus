@@ -7,7 +7,7 @@ import {
   type PlanItem,
 } from '@proteus/schema';
 import {
-  approvalErrorMessage, approvalRequest, approvalSubtitle, isAutonomous, scopeOf,
+  approvalErrorMessage, approvalRequest, approvalSubtitle, isAutonomous, scopeOf, approvalAvailability,
 } from '../src/lib/approval';
 
 /** PRD-10 — what the user reads before authorising code changes. */
@@ -124,5 +124,58 @@ describe('a refused approval explains itself', () => {
       .toContain('Reload the assessment');
     expect(approvalErrorMessage(400, 'That is not an option on this gate.'))
       .toBe('That is not an option on this gate.');
+  });
+});
+
+describe('the migration is always a human decision', () => {
+  /**
+   * The approval bar used to render only at `AWAITING_APPROVAL`.
+   *
+   * A project whose assessment completed but whose gate never opened — which
+   * happened, because an unrelated blob write failed two lines before the gate
+   * — showed a finished assessment with no way to act on it. The one control
+   * the product gives the user was gone, and nothing said why.
+   */
+  const project = (stage: string, migrationApproved = false) => ({
+    stage,
+    summary: { migrationApproved },
+  } as unknown as Parameters<typeof approvalAvailability>[0]);
+
+  const withPlan = (modes: string[]) => ({
+    status: 'READY',
+    planItems: modes.map((mode, i) => ({
+      planItemId: `p${i}`, mode, expectedChanges: [{ paths: ['src/A.java'] }],
+    })),
+  } as unknown as Assessment);
+
+  it('offers approval from either stage that means "waiting on you"', () => {
+    for (const stage of ['ASSESSMENT_READY', 'AWAITING_APPROVAL']) {
+      const a = approvalAvailability(project(stage), withPlan(['AUTONOMOUS_MIGRATION']));
+      expect(a.offer, stage).toBe(true);
+      expect(a.enabled, stage).toBe(true);
+    }
+  });
+
+  it('does not offer it before the assessment is finished', () => {
+    for (const stage of ['CREATED', 'ANALYZING']) {
+      expect(approvalAvailability(project(stage), withPlan(['AUTONOMOUS_MIGRATION'])).offer, stage)
+        .toBe(false);
+    }
+  });
+
+  it('stops offering it once the migration is approved', () => {
+    // The bar becomes the record of what was authorised, which is a different
+    // component — this one must not keep asking.
+    const a = approvalAvailability(project('MIGRATING', true), withPlan(['AUTONOMOUS_MIGRATION']));
+    expect(a.offer).toBe(false);
+  });
+
+  it('offers but disables when nothing is inside the boundary, and says why', () => {
+    const a = approvalAvailability(project('ASSESSMENT_READY'), withPlan(['NO_AUTONOMOUS_CHANGE']));
+    // Offered, so the user can see there is nothing to approve rather than
+    // wondering where the control went.
+    expect(a.offer).toBe(true);
+    expect(a.enabled).toBe(false);
+    expect(a.reason).toContain('autonomy boundary');
   });
 });

@@ -407,7 +407,11 @@ export class DiscoveryService {
     await this.repos.discoveryRuns.patch({ discoveryRunId: run.discoveryRunId } as never, {
       status: 'FAILED', completedAt: at, updatedAt: at, error: reason.slice(0, 2000),
     } as never);
-    await this.repos.projects.transition(run.projectId, 'ANALYZING', 'FAILED').catch(() => undefined);
+    // Not a guarded transition: discovery can die before the project ever
+    // reaches ANALYZING — a clone that fails on a bad token leaves it at
+    // CREATED — and a guarded write would silently do nothing, leaving a dead
+    // project looking like it is still working.
+    await this.repos.projects.markFailed(run.projectId, reason);
     await this.repos.events.emit(run.projectId, {
       type: 'DISCOVERY_FAILED', phase: 'DISCOVERY', level: 'MILESTONE', severity: 'ERROR',
       title: 'Discovery failed', message: reason.slice(0, 2000),

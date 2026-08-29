@@ -484,3 +484,49 @@ describe('FR-4 · an approved assessment is final', () => {
     expect(stored.status).toBe('APPROVED');
   });
 });
+
+describe('approval is available from either stage that means "waiting on you"', () => {
+  /**
+   * The stage check used to name `AWAITING_APPROVAL` alone.
+   *
+   * That stage is set by the assessment job in the same breath as opening the
+   * gate. When an unrelated failure stopped the job two lines earlier, the
+   * project stayed at ASSESSMENT_READY — assessment complete, findings written,
+   * and no way for a human to authorise anything. Approving is the product's one
+   * human decision; it cannot depend on a single bookkeeping transition.
+   */
+  it('approves a project whose gate was never opened', async () => {
+    const { project, assessment } = await atTheGate();
+    // Exactly the state the blob failure left behind: ready, but never moved on.
+    await t.repos.projects.transition(project.projectId, 'AWAITING_APPROVAL', 'ASSESSMENT_READY');
+    await t.repos.humanGates.collection.deleteMany({ projectId: project.projectId } as never);
+
+    const res = await fetch(`${s.url}/projects/${project.projectId}/migration/approve`, {
+      method: 'POST',
+      headers: { ...authFor(OWNER), 'content-type': 'application/json' },
+      body: JSON.stringify(approvalBody(assessment)),
+    });
+
+    expect(res.status).toBe(201);
+    const after = await t.repos.projects.byId(project.projectId);
+    expect(after?.stage).toBe('MIGRATING');
+
+    // Consent still has somewhere to live: the gate is opened and resolved in
+    // the same breath rather than skipped.
+    const gates = await t.repos.humanGates.find({ projectId: project.projectId } as never);
+    expect(gates).toHaveLength(1);
+    expect(gates[0]?.status).toBe('RESOLVED');
+  });
+
+  it('still refuses a stage where approving means nothing', async () => {
+    const { project, assessment } = await atTheGate();
+    await t.repos.projects.transition(project.projectId, 'AWAITING_APPROVAL', 'ANALYZING');
+
+    const res = await fetch(`${s.url}/projects/${project.projectId}/migration/approve`, {
+      method: 'POST',
+      headers: { ...authFor(OWNER), 'content-type': 'application/json' },
+      body: JSON.stringify(approvalBody(assessment)),
+    });
+    expect(res.status).toBe(409);
+  });
+});

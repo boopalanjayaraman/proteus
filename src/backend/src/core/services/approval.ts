@@ -1,5 +1,6 @@
 import {
-  APPROVE_OPTION_ID,
+
+  APPROVABLE_STAGES,  APPROVE_OPTION_ID,
   AUTONOMOUS_PLAN_MODES,
   DECLINE_OPTION_ID,
   MIGRATION_DISCLOSURE_TEXT,
@@ -206,7 +207,7 @@ export class ApprovalService {
       return { run: already, gate, assessment, created: false };
     }
 
-    if (project.stage !== 'AWAITING_APPROVAL') {
+    if (!(APPROVABLE_STAGES as readonly string[]).includes(project.stage)) {
       throw new ApprovalError(
         'WRONG_STAGE',
         `A project in ${project.stage} cannot be approved for migration.`,
@@ -363,7 +364,10 @@ export class ApprovalService {
     run: MigrationRun,
     now: Date,
   ): Promise<void> {
-    await this.repos.projects.transition(project.projectId, 'AWAITING_APPROVAL', 'MIGRATING', {
+    // From whichever approvable stage the project was actually in, not from a
+    // hardcoded one: an assessment that finished but never got its gate opened
+    // is still an assessment a human may approve.
+    await this.repos.projects.transition(project.projectId, project.stage, 'MIGRATING', {
       stageDetail: 'PREPARING_MIGRATION',
       // The gate is answered; nothing is waiting on the user any more.
       actionRequired: false,

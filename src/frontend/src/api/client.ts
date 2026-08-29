@@ -89,6 +89,64 @@ export class ApiClient {
   requiredScopes = () => this.request<{ scopes: string[] }>('/projects/required-scopes');
 
   /**
+   * Edits a project. The repository URL is not editable — that is a new project.
+   *
+   * `githubToken` omitted leaves the stored credential alone; supplied, it adds
+   * a new secret version.
+   */
+  updateProject = (projectId: string, body: {
+    name?: string; defaultBranch?: string; instructions?: string; githubToken?: string;
+  }) => this.request<Project>(`/projects/${projectId}`, {
+    method: 'PATCH', body: JSON.stringify(body),
+  });
+
+  /** Attaches one more context file to an existing project. */
+  uploadFile = (projectId: string, file: {
+    kind: string; originalName: string; mimeType: string; contentBase64: string;
+  }) => this.request<unknown>(`/projects/${projectId}/files`, {
+    method: 'POST', body: JSON.stringify(file),
+  });
+
+  /** Runs discovery again over the edited context. */
+  rediscover = (projectId: string) =>
+    this.request<{ status: string }>(`/projects/${projectId}/rediscover`, {
+      method: 'POST', body: '{}',
+    });
+
+  /**
+   * Archives a project. Irreversible, so the id is typed rather than clicked.
+   */
+  archiveProject = (projectId: string) =>
+    this.request<Project>(`/projects/${projectId}/archive`, {
+      method: 'POST', body: JSON.stringify({ confirm: projectId }),
+    });
+
+  /** What a delete would do. Platform admin only; changes nothing. */
+  deletionPreview = (projectId: string) =>
+    this.request<{
+      projectId: string; lifecycle: string; totalRows: number;
+      rows: Array<{ collection: string; count: number }>;
+      sandbox: { present: boolean; url?: string };
+      credential: { present: boolean };
+    }>(`/projects/${projectId}/deletion-preview`);
+
+  /** Soft delete. Platform admin only. */
+  deleteProject = async (projectId: string): Promise<void> => {
+    const body = JSON.stringify({ confirm: projectId });
+    const res = await fetch(`${this.baseUrl}/projects/${projectId}`, {
+      method: 'DELETE', headers: await this.headers({ body }), body,
+    });
+    if (!res.ok) {
+      const parsed = (await res.json().catch(() => null)) as
+        | { error?: { code: string; message: string } } | null;
+      throw new ApiClientError(
+        res.status, parsed?.error?.code ?? 'UNKNOWN',
+        parsed?.error?.message ?? res.statusText,
+      );
+    }
+  };
+
+  /**
    * Creates a project. The token is sent once and never comes back — the
    * response carries only a display prefix and a status.
    */

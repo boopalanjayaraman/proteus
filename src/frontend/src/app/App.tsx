@@ -1,7 +1,8 @@
 import type { Project } from '@proteus/schema';
 import { useEffect, useState } from 'react';
-import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
-import { screenForPath } from '../lib/activity';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { projectIdFromPath, screenForPath } from '../lib/activity';
+import { READ_ONLY_NOTICE, isArchived } from '../lib/lifecycle';
 import { Activity } from '../screens/Activity';
 import { Header } from '../components/layout/Header';
 import { Nav } from '../components/layout/Nav';
@@ -22,27 +23,49 @@ const CRUMBS: Record<string, string> = {
   migration: 'MIGRATION',
   sandbox: 'SANDBOX & REPORT',
   activity: 'PROTEUS / ACTIVITY',
+  edit: 'EDIT PROJECT',
 };
 
-/** Loads the project named in the route, so the header and nav can derive from it. */
-function useRouteProject(): Project | null {
-  const { id } = useParams<{ id: string }>();
+/**
+ * Loads the project named in the route, so the header and nav can derive from it.
+ *
+ * The id comes from the pathname rather than `useParams`, because this hook runs
+ * in the shell — which renders `<Routes>` as a child and is therefore outside
+ * every route that declares `:id`.
+ */
+function useRouteProject(pathname: string): Project | null {
+  const id = projectIdFromPath(pathname);
   const { api, firebaseUser } = useAuth();
   const [project, setProject] = useState<Project | null>(null);
 
+  /**
+   * The selection outlives the route.
+   *
+   * Going to the project list is how you *pick* a project, not how you abandon
+   * one — clearing the rail on the way there means the list is the one screen
+   * from which you cannot get back to what you were doing. The selection changes
+   * only when another project is opened, and clears only on sign-out.
+   */
+  const selectedId = id ?? project?.projectId ?? null;
+
   useEffect(() => {
-    if (!id || !firebaseUser) { setProject(null); return; }
+    if (!firebaseUser) { setProject(null); return; }
+    if (!selectedId) return;
     let cancelled = false;
-    api.project(id).then((p) => { if (!cancelled) setProject(p); }).catch(() => setProject(null));
+    api.project(selectedId)
+      .then((p) => { if (!cancelled) setProject(p); })
+      // A project that has been deleted stops being the selection, rather than
+      // leaving the rail pointing at something no longer there.
+      .catch(() => { if (!cancelled) setProject(null); });
     return () => { cancelled = true; };
-  }, [id, firebaseUser, api]);
+  }, [selectedId, firebaseUser, api]);
 
   return project;
 }
 
 function Shell() {
-  const project = useRouteProject();
   const { pathname } = useLocation();
+  const project = useRouteProject(pathname);
   const { api } = useAuth();
 
   /**
@@ -68,10 +91,20 @@ function Shell() {
       <Nav project={project} />
       <div className="body">
         <Header crumb={crumb} project={project} />
+        {/* One banner for every screen. The API refuses the writes regardless;
+            this is so nobody has to discover that by clicking. */}
+        {project && isArchived(project) && (
+          <div className="archived-banner">
+            <span className="mono archived-badge">ARCHIVED</span>
+            <span>{READ_ONLY_NOTICE}</span>
+          </div>
+        )}
         <main className="main">
           <Routes>
             <Route path="/projects" element={<Projects />} />
             <Route path="/projects/new" element={<CreateProject />} />
+            {/* The same screen: editing describes the same thing creating does. */}
+            <Route path="/projects/:id/edit" element={<CreateProject />} />
             <Route path="/projects/:id/discovery" element={<Discovery />} />
             <Route path="/projects/:id/assessment" element={<Assessment />} />
             <Route path="/projects/:id/migration" element={<Migration />} />

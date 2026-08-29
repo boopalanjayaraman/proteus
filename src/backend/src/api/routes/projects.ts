@@ -1,10 +1,14 @@
-import { CreateProjectInput, FileKind, REQUIRED_GITHUB_SCOPES, railProgress, type Project } from '@proteus/schema';
+import {
+  CreateProjectInput, FileKind, REDISCOVERABLE_STAGES, REQUIRED_GITHUB_SCOPES,
+  UpdateProjectInput, railProgress, type Project,
+} from '@proteus/schema';
 import type { FastifyInstance } from 'fastify';
 import type { ProjectService, UploadedFile } from '../../core/services/projects';
+import { LifecycleError, type LifecycleService } from '../../core/services/lifecycle';
 import type { Repositories } from '../../core/repositories';
 import { ApiError } from '../errors';
 import { currentUser } from '../middleware/auth';
-import { loadOwnedProject } from '../middleware/ownership';
+import { loadOwnedProject, loadProjectAsAdmin } from '../middleware/ownership';
 import { activityContext } from '../middleware/activity';
 import type { ActivityRecorder } from '../../core/services/activity';
 
@@ -61,6 +65,8 @@ export function registerProjectRoutes(
    */
   startDiscovery?: (project: Project) => void,
   activity?: ActivityRecorder,
+  /** Archive and soft delete. PRD-17 supplies it. */
+  lifecycle?: LifecycleService,
 ): void {
   /** Records against the request, or does nothing. Never awaited (FR-5). */
   const record = (
@@ -181,17 +187,167 @@ export function registerProjectRoutes(
     },
   );
 
-  app.delete<{ Params: Params }>('/projects/:id', async (req, reply) => {
-    await loadOwnedProject(repos, req, req.params.id);
-    await service.delete(req.params.id);
-    req.log.info({ projectId: req.params.id }, 'project deleted, credential destroyed');
-    // Outlives what it describes: the project is gone and this row is the only
-    // remaining record that it existed and who removed it.
-    record(req, {
-      action: 'PROJECT_DELETED',
-      summary: `Deleted project ${req.params.id}`,
-      projectId: req.params.id,
-    });
-    return reply.status(204).send();
+  /**
+   * Edit an existing project.
+   *
+   * The repository URL is not editable — see `UpdateProjectInput`. Nothing here
+   * touches discovery: editing the instructions changes what the *next* run
+   * reasons over, and re-running is a separate, explicit act.
+   */
+  app.patch<{ Params: Params; Body: unknown }>('/projects/:id', async (req) => {
+    const project = await loadOwnedProject(repos, req, req.params.id);
+
+    const parsed = UpdateProjectInput.safeParse(req.body);
+    if (!parsed.success) {
+      // Names the field, never the value: a validation error on githubToken
+      // must not put the token in a response.
+      throw ApiError.badRequest(
+        `Invalid update: ${parsed.error.issues.map((i) => i.path.join('.')).join(', ')}`,
+      );
+    }
+
+    const { project: updated, changed } = await service.update(project.projectId, parsed.data);
+    if (changed.length > 0) {
+      record(req, {
+        action: 'PROJECT_UPDATED',
+        summary: `Updated ${project.name} — ${changed.join(', ')}`,
+        projectId: project.projectId,
+        detail: { fields: changed.join(',') },
+      });
+      // A credential change is the entry an auditor looks for, so it is its own
+      // row rather than a field name inside another one.
+      if (changed.includes('githubToken')) {
+        record(req, {
+          action: 'TOKEN_REPLACED',
+          summary: 'Replaced the repository access token',
+          target: updated.repository.credential?.displayPrefix ?? 'github-pat',
+          projectId: project.projectId,
+          detail: { version: updated.repository.credential?.secretVersion ?? '' },
+        });
+      }
+    }
+    return present(updated);
   });
+
+  /**
+   * Runs discovery again, over the edited context.
+   *
+   * Separate from the edit because they are separate decisions: changing the
+   * instructions is cheap and reversible, re-reading the repository is neither.
+   */
+  app.post<{ Params: Params }>('/projects/:id/rediscover', async (req, reply) => {
+    const project = await loadOwnedProject(repos, req, req.params.id);
+    if (!startDiscovery) throw ApiError.badRequest('Discovery is not configured.');
+
+    if (!(REDISCOVERABLE_STAGES as readonly string[]).includes(project.stage)) {
+      throw ApiError.conflict(
+        `A project in ${project.stage} cannot be re-analysed. The migration's baseline was `
+        + 'captured against the findings that exist now, and replacing them underneath it '
+        + 'would leave it executing a plan its evidence no longer supports.',
+      );
+    }
+
+    await repos.projects.collection.updateOne({ projectId: project.projectId } as never, {
+      $set: {
+        stage: 'ANALYZING', stageEnteredAt: new Date(), actionRequired: false,
+        'summary.discoveryComplete': false,
+        'summary.lastActivityAt': new Date(),
+        'summary.lastActivityText': 'Re-analysing the repository',
+      } as never,
+      $inc: { version: 1 } as never,
+    });
+
+    record(req, {
+      action: 'DISCOVERY_STARTED',
+      summary: `Re-ran discovery for ${project.name}`,
+      projectId: project.projectId,
+      detail: { from: project.stage },
+    });
+
+    startDiscovery((await repos.projects.byId(project.projectId))!);
+    return reply.status(202).send({ status: 'ANALYZING' });
+  });
+
+  /**
+   * Archive — the owner's action, and irreversible from here.
+   *
+   * The sandbox goes with it: an archived project offers no link to review one,
+   * so retaining it would hold a public URL and a platform slot for nothing.
+   */
+  app.post<{ Params: Params; Body: { confirm?: string } }>(
+    '/projects/:id/archive',
+    async (req) => {
+      const project = await loadOwnedProject(repos, req, req.params.id);
+      if (!lifecycle) throw ApiError.badRequest('Archiving is not configured.');
+
+      const archived = await asApiError(() =>
+        lifecycle.archive(project, currentUser(req).uid, req.body?.confirm ?? ''),
+      );
+      req.log.info({ projectId: project.projectId }, 'project archived, sandbox released');
+      record(req, {
+        action: 'PROJECT_ARCHIVED',
+        summary: `Archived ${project.name} — read-only from here`,
+        projectId: project.projectId,
+        detail: { stage: project.stage },
+      });
+      return present(archived);
+    },
+  );
+
+  /** What a delete would do. Platform admin only, and changes nothing. */
+  app.get<{ Params: Params }>('/projects/:id/deletion-preview', async (req) => {
+    // Not `loadOwnedProject`: delete exists to clear other people's test
+    // projects, so the role replaces the ownership check rather than adding to it.
+    const project = await loadProjectAsAdmin(repos, req, req.params.id);
+    if (!lifecycle) throw ApiError.badRequest('Deletion is not configured.');
+    return lifecycle.preview(project);
+  });
+
+  /**
+   * Delete — a soft delete, platform admins only.
+   *
+   * Nothing is removed. The project becomes invisible, which every other route
+   * inherits from `byId` excluding it, so no route needs a check of its own.
+   */
+  app.delete<{ Params: Params; Body: { confirm?: string } }>(
+    '/projects/:id',
+    async (req, reply) => {
+      const project = await loadProjectAsAdmin(repos, req, req.params.id);
+      if (!lifecycle) throw ApiError.badRequest('Deletion is not configured.');
+
+      // Recorded before the project disappears, and never deleted afterwards:
+      // this row is the only remaining record of who removed it.
+      record(req, {
+        action: 'PROJECT_DELETED',
+        summary: `Deleted ${project.name} (${project.projectId})`,
+        projectId: project.projectId,
+        detail: { stage: project.stage, lifecycle: project.lifecycle },
+      });
+
+      await asApiError(() =>
+        lifecycle.softDelete(project, currentUser(req).uid, req.body?.confirm ?? ''),
+      );
+      req.log.warn(
+        { projectId: project.projectId, by: currentUser(req).uid },
+        'project soft-deleted, credential destroyed, sandbox released',
+      );
+      return reply.status(204).send();
+    },
+  );
+}
+
+/** Turns a lifecycle refusal into the HTTP answer it deserves. */
+async function asApiError<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof LifecycleError) {
+      // A typed-confirmation mismatch is the caller's mistake to fix; a busy
+      // project and an already-archived one are both conflicts.
+      throw e.code === 'CONFIRM'
+        ? ApiError.badRequest(e.message)
+        : ApiError.conflict(e.message);
+    }
+    throw e;
+  }
 }

@@ -18,6 +18,19 @@ export class StaleProjectError extends Error {
   }
 }
 
+/**
+ * Fills in a field that predates its own default.
+ *
+ * `findOne` returns the raw document without parsing, so Zod's
+ * `.default('ACTIVE')` never applies on the way out. A backfill fixes the stored
+ * data; this makes the code correct even for a document that escaped it — which
+ * matters because the wrong branch here turns the whole product read-only.
+ */
+function hydrate(project: Project | null): Project | null {
+  if (!project) return null;
+  return project.lifecycle ? project : { ...project, lifecycle: 'ACTIVE' };
+}
+
 export class ProjectRepository extends Repository<typeof Project> {
   constructor(database: Db) {
     super(database, COLLECTIONS.projects, Project);
@@ -29,17 +42,69 @@ export class ProjectRepository extends Repository<typeof Project> {
     return this.insert({ ...project, projectId } as Project);
   }
 
+  /**
+   * The project, unless it has been deleted.
+   *
+   * This and `listForOwner` are the only two reads in the backend that surface
+   * a project — everything else is an `updateOne` scoped by a projectId the
+   * caller already holds. Excluding DELETED here is therefore the whole of
+   * FR-15: every project-scoped route 404s on a deleted project without
+   * needing a check of its own.
+   */
   async byId(projectId: string): Promise<Project | null> {
-    return this.findOne({ projectId } as never);
+    return hydrate(await this.findOne({ projectId, lifecycle: { $ne: 'DELETED' } } as never));
   }
 
-  /** Landing screen: one query, `summary` is the tile. */
+  /**
+   * The same lookup, including deleted projects.
+   *
+   * For the two callers that legitimately need one: the delete endpoint, which
+   * must be idempotent, and the orphan sweep. Named so that reaching for it is
+   * a deliberate act rather than an autocomplete.
+   */
+  async byIdIncludingDeleted(projectId: string): Promise<Project | null> {
+    return hydrate(await this.findOne({ projectId } as never));
+  }
+
+  /** Landing screen: one query, `summary` is the tile. Archived projects stay. */
   async listForOwner(ownerId: string, limit = 50): Promise<Project[]> {
-    return (await this.collection
-      .find({ ownerId } as never)
+    return ((await this.collection
+      .find({ ownerId, lifecycle: { $ne: 'DELETED' } } as never)
       .sort({ 'summary.lastActivityAt': -1 })
       .limit(limit)
-      .toArray()) as unknown as Project[];
+      .toArray()) as unknown as Project[])
+      .map((p) => hydrate(p)!);
+  }
+
+  /**
+   * Marks a project failed from wherever it happens to be.
+   *
+   * Unconditional on purpose. `transition` guards on the expected stage, which
+   * is right for the happy path and wrong here: a job can die anywhere — a
+   * clone that fails while the project is still CREATED, a crash between two
+   * stages — and a guarded write would leave it stuck in the stage it was
+   * passing through, looking like it is still working.
+   *
+   * The reason is stored on the project rather than only on the run, because
+   * the project list is where someone looks first and it has no run to read.
+   */
+  async markFailed(projectId: string, reason: string): Promise<void> {
+    const at = new Date();
+    await this.collection.updateOne(
+      { projectId } as never,
+      {
+        $set: {
+          stage: 'FAILED',
+          stageEnteredAt: at,
+          updatedAt: at,
+          failureReason: reason.slice(0, 2000),
+          actionRequired: false,
+          'summary.lastActivityAt': at,
+          'summary.lastActivityText': `Failed — ${reason.slice(0, 160)}`,
+        } as never,
+        $inc: { version: 1 } as never,
+      },
+    );
   }
 
   /**

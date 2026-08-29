@@ -128,8 +128,6 @@ export async function runAssessment(
     throw e;
   }
 
-  await writeReport(project, assessment, deps, { nodes, edges, files });
-
   // The gate. Everything above is preparation; this is the moment the product
   // stops and asks (spec §20).
   //
@@ -139,6 +137,31 @@ export async function runAssessment(
   // approval carries what was acknowledged.
   await repos.projects.transition(project.projectId, 'ASSESSMENT_READY', 'AWAITING_APPROVAL');
   await deps.approvals.openApprovalGate(project.projectId, assessment);
+
+  /**
+   * The report is written after the gate, and its failure does not end the run.
+   *
+   * It used to run first, and a bucket that rejected the write left the project
+   * at ASSESSMENT_READY for ever: the assessment existed, the findings existed,
+   * and the product never asked the question it exists to ask. A downloadable
+   * artifact is not worth an unasked approval.
+   *
+   * Not silent, though — the failure becomes an event, so the report's absence
+   * is visible on the screen that would have offered it, and regenerating the
+   * assessment produces it again.
+   */
+  try {
+    await writeReport(project, assessment, deps, { nodes, edges, files });
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    log.error({ err: e }, 'assessment report could not be written');
+    await repos.events.emit(project.projectId, {
+      type: 'ASSESSMENT_COMPLETED', phase: 'ASSESSMENT', level: 'DETAIL', severity: 'WARN',
+      title: 'Assessment report could not be stored',
+      message: `${reason} — the assessment itself is complete and the gate is open.`,
+      actor: 'SYSTEM', refs: {},
+    }).catch(() => undefined);
+  }
 
   return assessment;
 }
