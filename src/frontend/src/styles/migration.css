@@ -1,0 +1,94 @@
+/* Screen 4 — live autonomous migration. Layout from UX v1.2. */
+
+.migration { display: flex; height: 100%; min-height: 0; }
+
+/* ── stage rail ────────────────────────────────────────────────────────── */
+.mig-rail {
+  width: 238px; flex: none; display: flex; flex-direction: column;
+  border-right: 1px solid var(--line); background: var(--sur2);
+}
+.mig-branch {
+  flex: none; padding: 15px 16px; border-bottom: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.mig-branch-label { font-size: 9.5px; letter-spacing: 0.13em; color: var(--fg3); font-weight: 500; }
+.mig-branch-name { font-size: 10.5px; color: var(--acc); word-break: break-all; }
+.mig-branch-meta { font-size: 9px; letter-spacing: 0.05em; color: var(--fg4); }
+
+.mig-stages { flex: 1; min-height: 0; overflow: auto; padding: 12px 14px; }
+.mig-stage { display: flex; gap: 11px; min-height: 30px; }
+.mig-stage-marker { width: 9px; flex: none; display: flex; flex-direction: column; align-items: center; }
+.mig-dot {
+  width: 7px; height: 7px; border-radius: 50%; margin-top: 5px; flex: none;
+  background: transparent; border: 1px solid var(--line2);
+}
+.mig-line { flex: 1; width: 1px; background: var(--line); }
+.mig-stage-name {
+  font-size: 9.5px; line-height: 1.35; letter-spacing: 0.07em;
+  color: var(--fg4); padding-bottom: 10px;
+}
+.mig-stage.done .mig-dot { background: var(--ok); border-color: var(--ok); }
+.mig-stage.done .mig-stage-name { color: var(--fg2); }
+.mig-stage.done .mig-line { background: var(--ok); }
+/* The one stage actually happening. The pulse is the only motion on the rail,
+   so it reads as "here" without a legend. */
+.mig-stage.active .mig-dot { background: var(--acc); border-color: var(--acc); animation: pulse 1.6s ease-in-out infinite; }
+.mig-stage.active .mig-stage-name { color: var(--fg); font-weight: 500; }
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* ── main ──────────────────────────────────────────────────────────────── */
+.mig-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.mig-head {
+  flex: none; padding: 16px 22px 14px; border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+}
+.mig-head h1 { margin: 0; font: 400 16.5px/1.15 var(--sans); }
+.mig-stats { flex: none; display: flex; gap: 20px; }
+.mig-stat { display: flex; flex-direction: column; gap: 4px; min-width: 56px; }
+.mig-stat-value { font: 300 19px/1 var(--sans); }
+.mig-stat-label { font-size: 8.5px; letter-spacing: 0.08em; color: var(--fg3); }
+
+.mig-body { flex: 1; min-height: 0; display: flex; }
+.mig-feed { flex: 1; min-width: 0; overflow: auto; padding: 16px 20px; }
+.mig-side {
+  width: 340px; flex: none; min-width: 0; overflow: auto;
+  border-left: 1px solid var(--line); padding: 16px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+
+/* ── baseline contract ─────────────────────────────────────────────────── */
+.contract-item {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 12px; border: 1px solid var(--line); border-left-width: 2px;
+  border-radius: 5px; background: var(--rai);
+}
+.contract-top { display: flex; align-items: flex-start; gap: 9px; }
+.contract-label { flex: 1; font: 500 11.5px/1.4 var(--sans); }
+.contract-disposition { flex: none; font-size: 8px; letter-spacing: 0.07em; font-weight: 500; }
+.contract-kind { font-size: 8.5px; letter-spacing: 0.07em; color: var(--fg4); }
+.contract-assertion {
+  display: block; font-size: 10px; line-height: 1.6; color: var(--fg2);
+  word-break: break-all; white-space: pre-wrap;
+}
+.known-failure { font-size: 9.5px; color: var(--warn); margin-top: 4px; text-transform: none; letter-spacing: 0; }
+
+/* ── modifications ─────────────────────────────────────────────────────── */
+.change {
+  display: flex; flex-direction: column; gap: 5px;
+  padding-bottom: 11px; border-bottom: 1px solid var(--line);
+}
+.change-top { display: flex; align-items: baseline; gap: 8px; }
+.change-seq { font-size: 9px; color: var(--fg4); flex: none; }
+.change-summary { flex: 1; font: 500 11.5px/1.4 var(--sans); }
+.change-meta { font-size: 9px; letter-spacing: 0.05em; color: var(--fg3); }
+.change-integrity { font-size: 8.5px; letter-spacing: 0.06em; color: var(--fg4); }
+.change-reason { font-size: 10px; line-height: 1.6; color: var(--fg2); letter-spacing: 0; margin-top: 3px; }
+
+@media (max-width: 1100px) {
+  .migration { flex-direction: column; }
+  .mig-rail { width: 100%; border-right: 0; border-bottom: 1px solid var(--line); }
+  .mig-stages { display: flex; overflow-x: auto; }
+  .mig-body { flex-direction: column; }
+  .mig-side { width: 100%; border-left: 0; border-top: 1px solid var(--line); }
+}

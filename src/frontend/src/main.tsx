@@ -8,6 +8,7 @@ import './styles/tokens.css';
 import './styles/shell.css';
 import './styles/discovery.css';
 import './styles/assessment.css';
+import './styles/migration.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

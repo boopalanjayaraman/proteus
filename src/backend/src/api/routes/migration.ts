@@ -1,4 +1,7 @@
-import { APPROVE_OPTION_ID, ApproveMigrationInput, ResolveGateInput } from '@proteus/schema';
+import {
+  APPROVE_OPTION_ID, ApproveMigrationInput, ResolveGateInput,
+  type Baseline, type ExecutionRun, type MigrationChange,
+} from '@proteus/schema';
 import type { FastifyInstance } from 'fastify';
 import type { Repositories } from '../../core/repositories';
 import { ApprovalError, type ApprovalService } from '../../core/services/approval';
@@ -43,6 +46,44 @@ export function registerMigrationRoutes(
       : null;
     if (!run) throw ApiError.notFound('Migration run');
     return { run };
+  });
+
+  /**
+   * The baseline contract (spec §24).
+   *
+   * Returned with the executions that produced it, because a checklist a user
+   * cannot trace back to a command that ran is a claim rather than evidence.
+   */
+  app.get<{ Params: Params }>('/projects/:id/baseline', async (req) => {
+    await loadOwnedProject(repos, req, req.params.id);
+    const rows = await repos.baselines.collection
+      .find({ projectId: req.params.id } as never).sort({ capturedAt: -1 }).limit(1).toArray();
+    const baseline = rows[0] as Baseline | undefined;
+    if (!baseline) throw ApiError.notFound('Baseline');
+
+    const executions = await repos.executionRuns.collection
+      .find({
+        executionRunId: { $in: [baseline.build.executionRunId, baseline.tests.executionRunId] },
+      } as never)
+      .toArray() as unknown as ExecutionRun[];
+
+    return {
+      baseline,
+      // The full log stays in blob storage; the excerpt is what a screen shows.
+      executions: executions.map(({ logExcerpt, ...rest }) => ({
+        ...rest, logExcerpt: logExcerpt.slice(0, 20),
+      })),
+    };
+  });
+
+  /** Everything the agent has changed on the branch, newest first. */
+  app.get<{ Params: Params }>('/projects/:id/changes', async (req) => {
+    await loadOwnedProject(repos, req, req.params.id);
+    const changes = await repos.migrationChanges.collection
+      .find({ projectId: req.params.id } as never)
+      .sort({ sequence: -1 })
+      .toArray() as unknown as MigrationChange[];
+    return { count: changes.length, changes };
   });
 
   app.post<{ Params: Params }>('/projects/:id/migration/approve', async (req, reply) => {

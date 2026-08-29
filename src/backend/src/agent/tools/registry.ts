@@ -1,4 +1,4 @@
-import { ChangeType, CryptoUsage, PlanItemMode } from '@proteus/schema';
+import { ChangeType, CryptoUsage, FailureClassification, PlanItemMode } from '@proteus/schema';
 import { z } from 'zod';
 
 /**
@@ -168,3 +168,89 @@ export const AssessmentSummaryInput = z.object({
   whatAgentWillNotChange: z.string().min(1),
 });
 export type AssessmentSummaryInput = z.infer<typeof AssessmentSummaryInput>;
+
+// ---------------------------------------------------------------------------
+// A3 — branch, baseline and test engineering (PRD-11)
+// ---------------------------------------------------------------------------
+
+/**
+ * A3's table.
+ *
+ * It writes tests and mocks and it runs builds, but it holds no
+ * `apply_patch` for implementation source — that arrives with A4 in PRD-12.
+ * The separation is the reason `EXEC-INV-001` ("no source modification during
+ * baseline capture") can be structural rather than a prompt instruction: during
+ * this phase the capability to modify source is not on the table at all.
+ */
+export const TEST_ENGINEERING_TOOL_NAMES = [
+  'list_files', 'read_file', 'search_repository', 'inspect_tests',
+  'create_branch', 'generate_test', 'generate_mock', 'generate_fixture',
+  'commit', 'run_cloud_build', 'run_tests',
+] as const;
+
+/** Tools that change implementation source. A3 must hold none of them. */
+export const SOURCE_MUTATING_TOOL_NAMES = ['apply_patch', 'revert_patch'] as const;
+
+export const mutatesSource = (name: string): boolean =>
+  (SOURCE_MUTATING_TOOL_NAMES as readonly string[]).includes(name);
+
+/**
+ * One externally observable behaviour, captured before anything moves.
+ *
+ * `disposition` is absent for the same reason `FindingNarrativeInput` has no
+ * disposition field: `EXEC-INV-003` sets it per kind, and a field the model
+ * fills is a field the model decides. It may only *propose* a departure from
+ * the default, and only with a reason — which is recorded and constrained.
+ */
+export const InvariantInput = z.object({
+  kind: z.enum([
+    'API_BEHAVIOR', 'CRYPTO_OUTCOME', 'FAILURE_MODE', 'MESSAGE_FORMAT', 'FUNCTIONAL_OUTCOME',
+  ]),
+  description: z.string().min(1), // "Malformed peer key → 400"
+  /** Executable — `EXEC-INV-004` rejects prose, because verification re-runs this. */
+  assertion: z.string().min(8),
+  capturedFrom: z.enum(['EXISTING_TEST', 'GENERATED_PROBE', 'RUNTIME_OBSERVATION']),
+  proposedDisposition: z.enum(['MUST_PRESERVE', 'EXPECTED_TO_CHANGE']).optional(),
+  /** Required for the proposal to be considered at all. */
+  overrideReason: z.string().optional(),
+});
+export type InvariantInput = z.infer<typeof InvariantInput>;
+
+/**
+ * A test or mock the agent proposes to write.
+ *
+ * Nothing here is written on the model's say-so: every artifact passes through
+ * `guardTestArtifact` first, and an acceptance test is additionally run against
+ * the base commit before it is kept (`EXEC-TEST-002`).
+ */
+export const GeneratedTestInput = z.object({
+  path: z.string().min(1),
+  changeType: z.enum(['TEST', 'MOCK', 'FIXTURE']),
+  testKind: z.enum(['CHARACTERIZATION', 'MIGRATION_ACCEPTANCE_TEST', 'MOCK', 'FIXTURE']),
+  content: z.string().min(1),
+  summary: z.string().min(1),
+  rationale: z.string().min(1),
+  /** What a mock stands in for. Mocking the peer is permitted; the primitive is not. */
+  mockTarget: z.string().optional(),
+  findingIds: z.array(z.string()).default([]),
+  planItemIds: z.array(z.string()).default([]),
+  /** Spec §26 — classification comes before the edit, not after it. */
+  testIntegrity: z
+    .object({
+      failureClassification: FailureClassification,
+      reason: z.string().min(1),
+      baselineRequirementChanged: z.boolean(),
+      safeAutonomousModification: z.boolean(),
+    })
+    .optional(),
+});
+export type GeneratedTestInput = z.infer<typeof GeneratedTestInput>;
+
+/** Which components the agent judges to be uncovered (`EXEC-TEST-001`). */
+export const CoverageAssessmentInput = z.object({
+  component: z.string().min(1),
+  path: z.string().min(1),
+  covered: z.boolean(),
+  reasoning: z.string().min(1),
+});
+export type CoverageAssessmentInput = z.infer<typeof CoverageAssessmentInput>;

@@ -1,0 +1,91 @@
+# Baseline and migration builds for the repository under migration.
+#
+# This is the pipeline `BuildExecutor` submits. It is deliberately dumb: it
+# compiles, it runs tests, it uploads the JUnit XML, and it exits with the
+# build's own exit code. Every judgment about what the result MEANS — whether a
+# failure is pre-existing, whether an invariant survived, whether a test is
+# vacuous — happens in Proteus against this output, never here.
+#
+# Two properties the pipeline must have and a normal CI pipeline usually does not:
+#
+#   ALWAYS UPLOAD REPORTS  a failing build is exactly when the test results
+#                          matter most, so the artifact step runs regardless of
+#                          the test step's exit code (`allowFailure`).
+#   NEVER SUMMARISE        no step reduces the run to a pass/fail flag. The
+#                          agent reads the XML; a summary would discard the
+#                          per-test detail the diagnosis depends on.
+#
+# Substitutions are supplied per execution by the executor:
+#   _REPO_URL     the repository, cloned at _COMMIT_SHA
+#   _COMMIT_SHA   the commit under test — the approved base, or a branch head
+#   _BUILD_IMAGE  the toolchain, e.g. maven:3.9-eclipse-temurin-17
+#   _BUILD_CMD    compile only, tests skipped
+#   _TEST_CMD     the test run
+#   _RESULTS_URI  gs://<bucket>/projects/<id>/runs/<executionRunId>
+
+substitutions:
+  _BUILD_IMAGE: 'maven:3.9-eclipse-temurin-17'
+  _BUILD_CMD: 'mvn -B -q -DskipTests package'
+  _TEST_CMD: 'mvn -B verify'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'
+
+timeout: '1800s'
+
+steps:
+  # The token comes from Secret Manager at use, never from a substitution —
+  # substitutions are echoed into build logs.
+  - id: clone
+    name: 'gcr.io/cloud-builders/git'
+    entrypoint: 'bash'
+    secretEnv: ['REPO_TOKEN']
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        git clone --quiet "https://x-access-token:$$REPO_TOKEN@${_REPO_URL}" /workspace/src
+        cd /workspace/src
+        git fetch --quiet origin "${_COMMIT_SHA}" || true
+        git checkout --quiet "${_COMMIT_SHA}"
+        # The credential must not survive into the tree the build runs against.
+        git remote set-url origin "https://${_REPO_URL}"
+
+  - id: build
+    name: '${_BUILD_IMAGE}'
+    dir: '/workspace/src'
+    entrypoint: 'bash'
+    args: ['-c', 'set -o pipefail; ${_BUILD_CMD} 2>&1 | tee /workspace/build.log']
+
+  # allowFailure is the whole point: a red test run is a result, not an error.
+  # Failing the pipeline here would discard the reports that explain why.
+  - id: test
+    name: '${_BUILD_IMAGE}'
+    dir: '/workspace/src'
+    entrypoint: 'bash'
+    allowFailure: true
+    args: ['-c', 'set -o pipefail; ${_TEST_CMD} 2>&1 | tee /workspace/test.log']
+
+  - id: collect
+    name: 'gcr.io/cloud-builders/gsutil'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        set -uo pipefail
+        cd /workspace/src
+        mkdir -p /workspace/reports
+        # Both plugins, and neither is required to have run.
+        cp -f target/surefire-reports/TEST-*.xml /workspace/reports/ 2>/dev/null || true
+        cp -f target/failsafe-reports/TEST-*.xml /workspace/reports/ 2>/dev/null || true
+        cp -f build/test-results/test/TEST-*.xml /workspace/reports/ 2>/dev/null || true
+        gsutil -q -m cp /workspace/*.log "${_RESULTS_URI}/" || true
+        gsutil -q -m cp /workspace/reports/*.xml "${_RESULTS_URI}/reports/" || true
+        # Re-raise the test step's verdict so the build's own status is honest.
+        exit $(cat /workspace/test.exit 2>/dev/null || echo 0)
+
+availableSecrets:
+  secretManager:
+    - versionName: '${_TOKEN_SECRET_VERSION}'
+      env: 'REPO_TOKEN'

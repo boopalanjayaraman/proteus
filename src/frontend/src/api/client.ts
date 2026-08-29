@@ -1,6 +1,7 @@
 import type {
-  ApproveMigrationInput, Artifact, Assessment, Evidence, Finding, GraphEdge, GraphNode,
-  GraphStyle, HumanGate, MigrationRun, Project, ProjectEvent, Recommendation, User,
+  ApproveMigrationInput, Artifact, Assessment, Baseline, Evidence, ExecutionRun, Finding,
+  GraphEdge, GraphNode, GraphStyle, HumanGate, MigrationChange, MigrationRun, Project,
+  ProjectEvent, Recommendation, User,
 } from '@proteus/schema';
 
 /**
@@ -169,6 +170,18 @@ export class ApiClient {
   /** 404 until a human approves — before that there is no branch and no run. */
   migration = (projectId: string) =>
     this.request<{ run: MigrationRun }>(`/projects/${projectId}/migration`);
+
+  /** The behavioural contract, with the executions that established it. */
+  baseline = (projectId: string) =>
+    this.request<{ baseline: Baseline; executions: ExecutionRun[] }>(
+      `/projects/${projectId}/baseline`,
+    );
+
+  /** What the agent has changed on the branch, newest first. */
+  changes = (projectId: string) =>
+    this.request<{ count: number; changes: MigrationChange[] }>(
+      `/projects/${projectId}/changes`,
+    );
 
   artifacts = (projectId: string) =>
     this.request<{ artifacts: Artifact[] }>(`/projects/${projectId}/artifacts`);

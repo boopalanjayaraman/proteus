@@ -12,12 +12,15 @@ import { GraphService } from './core/services/graph';
 import { ProjectService } from './core/services/projects';
 import { GcpSecretVault } from './integrations/secrets/vault';
 import { GcsBlobStore } from './integrations/storage/blobs';
+import { ProcessExecutor } from './integrations/cloudbuild/executor';
+import { GitHubReader } from './integrations/github/client';
 import { gcpConfig } from './config/env';
 import { GeminiClient } from './agent/model';
 import { RuleEngine } from './core/rules/engine';
 import { loadRegistry } from './core/discovery/providers';
 import { runDiscovery } from './worker/discoveryJob';
 import { runAssessment } from './worker/assessmentJob';
+import { runTestEngineering } from './worker/migrationJob';
 
 /**
  * Engine assets ship with the repository, not the bundle.
@@ -100,8 +103,26 @@ async function main(): Promise<void> {
     }
   };
 
+  // The toolchain the repository under migration is built in. Configuring an
+  // image runs the build inside it, which is how a Java 17 Maven build succeeds
+  // on a host that has neither.
+  const executor = new ProcessExecutor(process.env.BUILD_IMAGE);
+  const github = new GitHubReader();
+
   const app = await buildServer({
     repos, projects, graph, assessments, approvals, blobs, verifier, logger: log,
+    // Deliberately not awaited, for the same reason discovery is not: the
+    // migration outlives the request that approved it.
+    startMigration: (projectId, migrationRunId) => {
+      void (async () => {
+        const project = await repos.projects.byId(projectId);
+        const run = await repos.migrationRuns.findOne({ migrationRunId } as never);
+        if (!project || !run) return;
+        await runTestEngineering(project, run, {
+          repos, projects, model, executor, blobs, github, logger: log,
+        });
+      })().catch((e) => log.error({ err: e, projectId }, 'migration job crashed'));
+    },
     regenerateAssessment: assess,
     // Deliberately not awaited: discovery outlives the request that starts it,
     // and the client watches it over SSE rather than waiting on a response.

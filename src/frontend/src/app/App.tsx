@@ -6,6 +6,7 @@ import { Nav } from '../components/layout/Nav';
 import { CreateProject } from '../screens/CreateProject';
 import { Assessment } from '../screens/assessment/Assessment';
 import { Discovery } from '../screens/discovery/Discovery';
+import { Migration } from '../screens/migration/Migration';
 import { Login } from '../screens/Login';
 import { Projects } from '../screens/Projects';
 import { Placeholder } from '../screens/Placeholder';
@@ -55,7 +56,7 @@ function Shell() {
             <Route path="/projects/new" element={<CreateProject />} />
             <Route path="/projects/:id/discovery" element={<Discovery />} />
             <Route path="/projects/:id/assessment" element={<Assessment />} />
-            <Route path="/projects/:id/migration" element={<Placeholder title="Live autonomous migration" prd="PRD-11 · PRD-12" />} />
+            <Route path="/projects/:id/migration" element={<Migration />} />
             <Route path="/projects/:id/sandbox" element={<Placeholder title="Sandbox & report" prd="PRD-13 · PRD-14" />} />
             <Route path="*" element={<Navigate to="/projects" replace />} />
           </Routes>
