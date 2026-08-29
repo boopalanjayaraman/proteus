@@ -2,7 +2,8 @@ import {
   AgentAction, Artifact, Assessment, Baseline, COLLECTIONS, DiscoveryRun,
   Evidence, ExecutionRun, Finding, GraphEdge, GraphNode, HumanGate,
   MigrationAttempt, MigrationChange, MigrationPolicy, MigrationRun, ProblemThread,
-  ProjectFile, Recommendation, SandboxDeployment, User, VerificationResult,
+  ProjectFile, Recommendation, SandboxDeployment, User, UserActivity,
+  VerificationResult,
 } from '@proteus/schema';
 import type { Db } from 'mongodb';
 import type { z } from 'zod';
@@ -42,6 +43,8 @@ export class Repositories {
   readonly sandboxDeployments;
   readonly humanGates;
   readonly events: EventRepository;
+  /** Append-only. There is deliberately no update path (PRD-15 FR-2). */
+  readonly userActivity;
   readonly agentActions;
   readonly artifacts;
 
@@ -74,6 +77,7 @@ export class Repositories {
     this.sandboxDeployments = r(COLLECTIONS.sandboxDeployments, SandboxDeployment);
     this.humanGates = r(COLLECTIONS.humanGates, HumanGate);
     this.events = new EventRepository(database);
+    this.userActivity = r(COLLECTIONS.userActivity, UserActivity);
     this.agentActions = r(COLLECTIONS.agentActions, AgentAction);
     this.artifacts = r(COLLECTIONS.artifacts, Artifact);
 

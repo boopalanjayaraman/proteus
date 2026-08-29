@@ -34,6 +34,17 @@ export const User = z.object({
   photoUrl: z.string().url().optional(),
   initials: z.string().min(1).max(3),
 
+  /**
+   * Two values, and no endpoint grants either.
+   *
+   * PLATFORM_ADMIN is seeded from PLATFORM_ADMIN_EMAILS and reconciled at every
+   * `GET /me`, so removing an address revokes the role on that user's next
+   * request. An enum rather than `isAdmin: true` because the name says what it
+   * grants; a request that could grant it would be a privilege-escalation path
+   * in the one product whose claim is bounded autonomy (D-021).
+   */
+  role: z.enum(['USER', 'PLATFORM_ADMIN']).default('USER'),
+
   preferences: z.object({
     theme: z.enum(['dark', 'light']).default('dark'),
     graphStyle: z.enum(['force', 'radial', 'blueprint']).default('force'),

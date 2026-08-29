@@ -33,8 +33,8 @@ than dressed up with a screen they do not really deliver.
 
 ```text
 01 ─┬─► 06 ─► 07 ─► 08 ─┐
-    │                    ├─► 09 ─► 10 ─► 11 ─► 12 ─► 13 ─► 14
-02 ─┴─► 03 ─► 04 ─► 05 ─┘
+    │                    ├─► 09 ─► 10 ─► 11 ─► 12 ─► 13 ─► 14 ─► 16
+02 ─┴─► 03 ─► 04 ─► 05 ─┴─────────────────────────────────► 15
 ```
 
 01 and 02 are independent of each other. Everything from 06 onward is a chain: the
@@ -52,8 +52,8 @@ migration loop cannot be built before the plan it executes exists.
 | 06 | `DELIVERED` — 2026-08-29, 17 acceptance tests against the real fixture |
 | 07 | `PARTIALLY DELIVERED` — 2026-08-29, agent + run orchestration; screen carries to 08 |
 | 08–14 | `DELIVERED` — 2026-08-29 |
-| 15 | `PLANNED` — audit log |
-| 16 | `PLANNED` — GCP execution and sandbox hosting. What a Cloud-Run-hosted Proteus needs: `CloudBuildExecutor`, `CloudRunDeployer`, live build streaming, caps per D-020 |
+| 15 | `DELIVERED` — 2026-08-29, 32 backend + 20 frontend acceptance tests. `PLATFORM_ADMIN` from configuration, own-activity scoping, page visits from each screen's first call, cursor paging |
+| 16 | `DELIVERED` — 2026-08-29, 29 acceptance tests. `CloudBuildExecutor`, `CloudRunDeployer`, live grouped test streaming, caps per D-020 |
 
 ## Conventions
 

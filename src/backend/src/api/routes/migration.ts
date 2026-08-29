@@ -15,6 +15,8 @@ import { StaleProjectError } from '../../core/repositories/projects';
 import { ApiError } from '../errors';
 import { currentUser } from '../middleware/auth';
 import { loadOwnedProject } from '../middleware/ownership';
+import { activityContext } from '../middleware/activity';
+import type { ActivityRecorder } from '../../core/services/activity';
 
 /**
  * The approval surface.
@@ -42,7 +44,15 @@ export function registerMigrationRoutes(
   capacity?: SandboxCapacityService,
   lifecycle?: SandboxLifecycleService,
   deployerFor?: (deployment: SandboxDeployment) => SandboxDeployer,
+  activity?: ActivityRecorder,
 ): void {
+  const record = (
+    req: Parameters<typeof activityContext>[0],
+    input: Parameters<ActivityRecorder['record']>[1],
+  ) => {
+    const ctx = activityContext(req);
+    if (ctx && activity) void activity.record(ctx, input);
+  };
   app.get<{ Params: Params }>('/projects/:id/gates', async (req) => {
     await loadOwnedProject(repos, req, req.params.id);
     const gates = await approvals.gates(req.params.id);
@@ -157,6 +167,14 @@ export function registerMigrationRoutes(
       );
     }
 
+    record(req, {
+      action: 'DIFF_DOWNLOADED',
+      summary: `Downloaded the branch diff for ${project.projectId}`,
+      target: `${project.projectId}-migration.diff`,
+      projectId: project.projectId,
+      detail: { modifications: withDiffs.length },
+    });
+
     return reply
       .header('content-type', 'text/x-diff; charset=utf-8')
       .header('content-disposition',
@@ -222,6 +240,11 @@ export function registerMigrationRoutes(
       throw ApiError.badRequest('No migration has run for this project yet.');
     }
     await generateReport(req.params.id);
+    record(req, {
+      action: 'ASSESSMENT_REGENERATED',
+      summary: `Regenerated the evidence package for ${project.projectId}`,
+      projectId: req.params.id,
+    });
     return reply.status(202).send({ status: 'GENERATING' });
   });
 
@@ -238,6 +261,26 @@ export function registerMigrationRoutes(
 
     const result = await lifecycle.extend(req.params.id);
     if (!result) throw ApiError.notFound('Sandbox deployment');
+
+    // The completion screen calls this both when a user follows the link and
+    // when they press Extend, so the two are recorded as what they are: opening
+    // a sandbox is the access that resets the clock, extending is a request that
+    // may hit the ceiling.
+    record(req, result.extended
+      ? {
+          action: 'SANDBOX_EXTENDED',
+          summary: result.atCeiling
+            ? 'Extended the sandbox to its maximum lifetime'
+            : 'Extended the sandbox',
+          projectId: req.params.id,
+          detail: { atCeiling: result.atCeiling },
+        }
+      : {
+          action: 'SANDBOX_OPENED',
+          summary: 'Opened the sandbox application',
+          projectId: req.params.id,
+        });
+
     return {
       expiresAt: result.deployment.expiresAt,
       hardExpiresAt: result.deployment.hardExpiresAt,
@@ -261,6 +304,12 @@ export function registerMigrationRoutes(
     }
 
     await releaseSandbox(repos, deployerFor(deployment), deployment, 'REQUESTED');
+    record(req, {
+      action: 'SANDBOX_TORN_DOWN',
+      summary: 'Tore down the sandbox and freed the slot',
+      target: deployment.service.url ?? deployment.service.name,
+      projectId: req.params.id,
+    });
     return reply.status(204).send();
   });
 
@@ -274,6 +323,21 @@ export function registerMigrationRoutes(
   app.get('/sandbox/capacity', async (req) => {
     if (!capacity) return { configured: false };
     const state = await capacity.state(currentUser(req).uid);
+    // A cap is not a failure — the migration still deploys, verifies and
+    // releases (D-020) — but a user who hits one should be able to see when and
+    // why the shareable link stopped appearing.
+    if (state.canRetain === false) {
+      record(req, {
+        action: 'CAPACITY_REACHED',
+        summary: state.boundBy === 'USER'
+          ? `At the per-user sandbox limit (${state.perUserUsed}/${state.perUserLimit}) — `
+            + 'the next migration will verify and release rather than retain'
+          : `At the platform sandbox limit (${state.totalUsed}/${state.totalLimit}) — `
+            + 'the next migration will verify and release rather than retain',
+        outcome: 'DENIED',
+        target: state.boundBy ?? 'PLATFORM',
+      });
+    }
     return { configured: true, ...state };
   });
 
@@ -288,6 +352,24 @@ export function registerMigrationRoutes(
     // A repeated approval is not an error — it is the same approval — so it
     // answers 200 with the run that exists rather than 409.
     if (result.created) startMigration?.(project.projectId, result.run.migrationRunId);
+
+    // The single most important row in this collection. It is the one human
+    // authorisation the whole product rests on, and the migration audit trail
+    // records that it happened without recording who gave it.
+    record(req, {
+      action: result.created ? 'MIGRATION_APPROVED' : 'MIGRATION_RERUN',
+      summary: result.created
+        ? `Approved the migration of ${project.name} — ${result.run.approval.approvedPlanItemIds.length} plan items`
+        : `Re-submitted an approval for ${project.name}; the existing run was returned`,
+      target: result.run.branch.name,
+      projectId: project.projectId,
+      detail: {
+        migrationRunId: result.run.migrationRunId,
+        assessmentVersion: input.assessmentVersion,
+        approvedItems: result.run.approval.approvedPlanItemIds.length,
+      },
+    });
+
     return reply.status(result.created ? 201 : 200).send({
       migrationRunId: result.run.migrationRunId,
       branch: result.run.branch.name,
@@ -327,6 +409,13 @@ export function registerMigrationRoutes(
         approvals.approve(project, currentUser(req).uid, input),
       );
       if (result.created) startMigration?.(project.projectId, result.run.migrationRunId);
+      record(req, {
+        action: result.created ? 'MIGRATION_APPROVED' : 'MIGRATION_RERUN',
+        summary: `Approved the migration of ${project.name} at gate ${gate.gateId}`,
+        target: gate.title,
+        projectId: project.projectId,
+        detail: { gateId: gate.gateId, migrationRunId: result.run.migrationRunId },
+      });
       return reply.status(result.created ? 201 : 200).send({
         migrationRunId: result.run.migrationRunId, gateId: gate.gateId, created: result.created,
       });
@@ -347,6 +436,16 @@ export function registerMigrationRoutes(
         updatedAt: now,
       } as never,
     });
+    // A decline changes nothing else, which is the point — but it is still a
+    // decision a person made, and the only place it is attributed to them.
+    record(req, {
+      action: gate.type === 'MIGRATION_APPROVAL' ? 'MIGRATION_DECLINED' : 'GATE_RESOLVED',
+      summary: `${gate.title} — ${decision.data.optionId.toLowerCase().replace(/_/g, ' ')}`,
+      target: gate.gateId,
+      projectId: project.projectId,
+      detail: { optionId: decision.data.optionId, gateType: gate.type },
+    });
+
     await repos.events.emit(project.projectId, {
       type: 'HUMAN_GATE_RESOLVED', phase: 'MIGRATION', level: 'ACTIVITY', severity: 'INFO',
       title: `${gate.title} — ${decision.data.optionId.toLowerCase()}`,

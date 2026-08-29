@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import {
-  coreConfig, configuredFeatures, firebaseConfig, geminiConfig, hostingConfig,
+  activityConfig, coreConfig, configuredFeatures, firebaseConfig, geminiConfig,
+  hostingConfig, platformAdminEmails,
 } from './config/env';
 import { createLogger } from './config/logger';
 import { buildServer } from './api/server';
@@ -8,6 +9,7 @@ import { FirebaseTokenVerifier, type TokenVerifier } from './api/middleware/auth
 import { changeStreamsAvailable, connect, disconnect, redactUri } from './core/db/client';
 import { ensureIndexes } from './core/db/indexes';
 import { Repositories } from './core/repositories';
+import { ActivityRecorder } from './core/services/activity';
 import { ApprovalService } from './core/services/approval';
 import { AssessmentService } from './core/services/assessment';
 import { GraphService } from './core/services/graph';
@@ -165,10 +167,28 @@ async function main(): Promise<void> {
   const deployerFor = (d: { placement?: string }) =>
     d.placement === 'CLOUD_RUN' ? deployer : new LocalDockerDeployer();
 
+  // The platform admin role comes from configuration and nowhere else. An empty
+  // list is a valid deployment — every user then sees their own activity and
+  // nobody sees everyone's.
+  const adminEmails = platformAdminEmails();
+  const activitySettings = activityConfig();
+  const activity = new ActivityRecorder(repos, {
+    adminEmails,
+    sessionGapMinutes: activitySettings.ACTIVITY_SESSION_GAP_MINUTES,
+    navigationWindowSeconds: activitySettings.ACTIVITY_NAVIGATION_WINDOW_SECONDS,
+  });
+  log.info(
+    { platformAdmins: adminEmails.length },
+    adminEmails.length === 0
+      ? 'no PLATFORM_ADMIN_EMAILS configured — every user sees only their own activity'
+      : 'platform admins configured',
+  );
+
   const github = new GitHubReader();
 
   const app = await buildServer({
     repos, projects, graph, assessments, approvals, blobs, verifier, logger: log,
+    activity,
     // Deliberately not awaited, for the same reason discovery is not: the
     // migration outlives the request that approved it.
     startMigration: (projectId, migrationRunId) => {

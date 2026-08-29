@@ -11,6 +11,16 @@
 .login-card h1 { font-size: 20px; line-height: 1.35; margin: 22px 0 8px; letter-spacing: -0.01em; }
 .login-card .sub { color: var(--fg2); margin: 0 0 24px; }
 .login-card .fine { color: var(--fg3); font-size: 12px; margin: 18px 0 0; }
+.login-nowrap { white-space: nowrap; }
+
+/* MIGRATES / RECOMMENDS — the two halves of what the product produces. */
+.login-split {
+  display: flex; flex-wrap: wrap; gap: 8px 30px; margin-top: 16px;
+  padding-top: 16px; border-top: 1px solid var(--line);
+}
+.login-split-col { display: flex; flex-direction: column; gap: 4px; }
+.login-split-label { font-size: 9px; letter-spacing: 0.12em; font-weight: 500; }
+.login-split-value { font-size: 12px; line-height: 1.6; color: var(--fg3); }
 .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 20px; }
 .chip {
   font-size: 10px; letter-spacing: 0.08em; color: var(--fg3);

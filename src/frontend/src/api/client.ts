@@ -1,8 +1,8 @@
 import type {
   ApproveMigrationInput, Artifact, Assessment, Baseline, Evidence, ExecutionRun, Finding,
   GraphEdge, GraphNode, GraphStyle, HumanGate, MigrationAttempt, MigrationChange,
-  MigrationRun, Project, ProjectEvent, Recommendation, SandboxDeployment, User,
-  VerificationResult,
+  MigrationRun, Project, ProjectEvent, Recommendation, SandboxDeployment, Screen, User,
+  UserActivity, VerificationResult,
 } from '@proteus/schema';
 
 /**
@@ -27,17 +27,33 @@ export type TokenSource = () => Promise<string | null>;
 export class ApiClient {
   constructor(private readonly baseUrl: string, private readonly token: TokenSource) {}
 
-  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  /**
+   * The screen the user is on, sent with every call as `x-proteus-screen`.
+   *
+   * Set once by the router. The backend records a page visit from the first call
+   * a screen makes rather than from a beacon, so this header is the whole
+   * mechanism — which is also why it lives at the one fetch wrapper every call
+   * goes through, where no screen can forget to send it. Validated server-side
+   * against a closed set of six; anything else is dropped, not stored.
+   */
+  screen: Screen | undefined;
+
+  private async headers(init: RequestInit = {}): Promise<Record<string, string>> {
     // Fetched per call rather than held: Firebase ID tokens expire hourly, and a
     // cached one turns into a 401 halfway through a long migration.
     const token = await this.token();
+    return {
+      ...(init.body ? { 'content-type': 'application/json' } : {}),
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(this.screen ? { 'x-proteus-screen': this.screen } : {}),
+      ...(init.headers as Record<string, string> | undefined),
+    };
+  }
+
+  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       ...init,
-      headers: {
-        ...(init.body ? { 'content-type': 'application/json' } : {}),
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-        ...init.headers,
-      },
+      headers: await this.headers(init),
     });
 
     if (!res.ok) {
@@ -117,17 +133,10 @@ export class ApiClient {
     projectId: string, nodeId: string,
     pin: { x: number; y: number; style: GraphStyle } | null,
   ) => {
-    const token = await this.token();
+    const body = JSON.stringify(pin);
     await fetch(
       `${this.baseUrl}/projects/${projectId}/graph/nodes/${encodeURIComponent(nodeId)}/pin`,
-      {
-        method: 'PATCH',
-        headers: {
-          'content-type': 'application/json',
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify(pin),
-      },
+      { method: 'PATCH', headers: await this.headers({ body }), body },
     );
   };
 
@@ -226,10 +235,9 @@ export class ApiClient {
 
   /** Frees a slot without waiting for expiry. */
   tearDownSandbox = async (projectId: string): Promise<void> => {
-    const token = await this.token();
     await fetch(`${this.baseUrl}/projects/${projectId}/sandbox`, {
       method: 'DELETE',
-      headers: token ? { authorization: `Bearer ${token}` } : {},
+      headers: await this.headers(),
     });
   };
 
@@ -265,9 +273,8 @@ export class ApiClient {
    * a query string would put it in logs and history.
    */
   download = async (projectId: string, artifact: Artifact): Promise<void> => {
-    const token = await this.token();
     const res = await fetch(this.artifactUrl(projectId, artifact.artifactId), {
-      headers: token ? { authorization: `Bearer ${token}` } : {},
+      headers: await this.headers(),
     });
     if (!res.ok) throw new ApiClientError(res.status, 'DOWNLOAD_FAILED', res.statusText);
 
@@ -281,4 +288,35 @@ export class ApiClient {
   };
 
   streamUrl = (projectId: string) => `${this.baseUrl}/projects/${projectId}/stream`;
+
+  /**
+   * A page of activity, newest first.
+   *
+   * `userId` is honoured only for a platform admin — a non-admin who sends it
+   * gets their own activity back rather than an error, because there is nothing
+   * to refuse and a 403 would confirm the filter means something.
+   */
+  activity = (params: {
+    category?: string; projectId?: string; outcome?: string; userId?: string;
+    from?: string; to?: string; q?: string; cursor?: string; limit?: number;
+    includeNavigation?: boolean;
+  } = {}) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== '' && v !== false) qs.set(k, String(v));
+    }
+    return this.request<{
+      scope: 'ALL' | 'SELF' | 'USER';
+      isAdmin: boolean;
+      count: number;
+      entries: Array<UserActivity & { atUtc: string }>;
+      nextCursor?: string;
+    }>(`/activity${qs.size ? `?${qs}` : ''}`);
+  };
+
+  /** Who has activity. One entry — the caller — unless they are an admin. */
+  activityUsers = () =>
+    this.request<{ users: Array<{ userId: string; userEmail: string; lastAt: string | null }> }>(
+      '/activity/users',
+    );
 }

@@ -1,0 +1,213 @@
+/*
+ * The activity log.
+ *
+ * A dense monospace table, because it is read by scanning a column of
+ * timestamps rather than by reading prose. Everything that is not the timestamp,
+ * the category or the summary is behind a click.
+ */
+
+.activity {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 24px 28px 48px;
+  max-width: 1400px;
+}
+
+.activity-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.activity-head h1 {
+  margin: 0 0 6px;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.activity-role {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  padding: 5px 9px;
+  border-radius: 6px;
+  color: var(--vio);
+  background: color-mix(in srgb, var(--vio) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--vio) 30%, transparent);
+}
+
+.activity-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  background: var(--sur);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.activity-filters select,
+.activity-filters input[type='date'],
+.activity-search {
+  background: var(--sur2);
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 7px 10px;
+}
+
+.activity-search {
+  flex: 1 1 260px;
+  min-width: 200px;
+}
+
+.activity-date {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.activity-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--fg2);
+  cursor: pointer;
+  user-select: none;
+}
+
+.activity-error {
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bad) 28%, transparent);
+}
+
+.activity-list {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--sur);
+}
+
+/*
+ * Columns rather than a table element: the row is a button, so a whole entry is
+ * one keyboard target instead of five.
+ */
+.activity-row {
+  display: grid;
+  grid-template-columns: 190px 120px minmax(0, 1fr) 110px;
+  gap: 14px;
+  align-items: baseline;
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 12px;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--line);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.activity-row:has(.activity-user) {
+  grid-template-columns: 190px 120px minmax(0, 1fr) 110px 200px;
+}
+
+.activity-row:first-child,
+.activity-header-row {
+  border-top: 0;
+}
+
+.activity-header-row {
+  cursor: default;
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  color: var(--fg4);
+  background: var(--sur2);
+  padding: 9px 14px;
+}
+
+.activity-row:not(.activity-header-row):hover,
+.activity-row.open {
+  background: var(--rai);
+}
+
+.activity-at {
+  color: var(--fg2);
+  white-space: nowrap;
+}
+
+.activity-cat {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.activity-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  color: var(--fg);
+}
+
+.activity-summary .activity-glyph {
+  flex: 0 0 auto;
+  width: 10px;
+}
+
+/* Says which half of the row the browser asserted, without shouting it. */
+.activity-declared {
+  flex: 0 0 auto;
+  font-size: 9px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fg4);
+  border: 1px solid var(--line2);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.activity-project,
+.activity-user {
+  color: var(--fg3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+  padding: 4px 14px 14px 218px;
+  font-size: 11px;
+  color: var(--fg2);
+  background: var(--rai);
+}
+
+.activity-detail .label {
+  color: var(--fg4);
+  margin-right: 5px;
+}
+
+.activity-more {
+  align-self: flex-start;
+}
+
+@media (max-width: 1100px) {
+  .activity-row,
+  .activity-row:has(.activity-user) {
+    grid-template-columns: 168px minmax(0, 1fr);
+    row-gap: 4px;
+  }
+  .activity-detail { padding-left: 14px; }
+}

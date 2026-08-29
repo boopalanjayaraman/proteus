@@ -613,4 +613,61 @@ decisions:
       the target topology is not a fallback.
     decided_on: 2026-08-29
     revised_on: 2026-08-29
+  - id: D-021
+    title: How a platform admin comes to exist, and how the audit log learns about page visits
+    category: product
+    status: ACCEPTED
+    raised: 2026-08-29
+    blocks: [PRD-15]
+    context: >
+      The user activity log has two halves that look like one feature and are not. The
+      first is authorisation: the log is viewable by its owner and, in full, by a platform
+      admin — but `User` carries identity, preferences and `lastSeenAt`, and no role of
+      any kind. The second is provenance: three of the required activities — sign-in,
+      sign-out and page visits — happen entirely in the browser. Firebase Auth is
+      client-side and the backend only ever sees an ID token on a request it was already
+      going to serve, so it never observes a login as an event and never observes a logout
+      at all.
+    options:
+      - Boolean isAdmin on User, granted through an admin endpoint
+      - Role enum on User, seeded from configuration, no endpoint grants it
+      - Reuse the existing events collection with a userId scope
+    recommendation: Role enum seeded from configuration, in a collection of its own.
+    impact_if_unresolved: >
+      Either an audit log a browser can forge entries into, or a privilege-escalation path
+      in the one product whose entire claim is bounded autonomy.
+    decision: >
+      `User.role` is an enum of USER and PLATFORM_ADMIN, seeded from
+      PLATFORM_ADMIN_EMAILS and applied at sign-in. No endpoint grants the role. A
+      boolean was rejected because `isAdmin: true` needs a comment to say what an admin
+      is; an endpoint was rejected because a product that rewrites cryptography on
+      someone's behalf should not ship a request that makes the caller an administrator.
+
+      There is no write endpoint. Every entry is a side effect of a request the backend
+      already authenticated and served, because an endpoint that writes audit entries from
+      a browser is a way to forge an audit log rather than a way to fill one.
+
+      Sign-in and sign-out are therefore not recorded, which the requester accepted. Page
+      visits are recorded from the first call each screen makes, labelled by an
+      `x-proteus-screen` header set once in the client's single fetch wrapper and validated
+      against the six screens the router declares. Repeat calls collapse into one entry per
+      screen per thirty seconds, so a screen making seven parallel calls on load produces
+      one row. The label is the only thing the client asserts and it is marked DECLARED
+      rather than OBSERVED; bounded to six values, the worst available lie is which of six
+      screens someone was on, while the request beside it stays real and authenticated.
+
+      Two entries survive from the dropped half at no cost, because `GET /me` is the app's
+      first call on load and already upserts the user: ACCOUNT_CREATED from the branch
+      where no user document existed, and SESSION_STARTED from `lastSeenAt` being older
+      than the session gap. SESSION_STARTED is deliberately not called a login — it is an
+      observation about request timing, and naming it a login would assert something the
+      backend cannot see.
+
+      A separate `user_activity` collection rather than a userId scope on `events`. They
+      answer different questions — the event log says a migration was approved, the
+      activity log says who approved it — and they have different access models,
+      different retention, and different volumes. Page views alone would swamp the live
+      migration feed that `events` exists to stream.
+    decided_on: 2026-08-29
+    revised_on: 2026-08-29
 ```

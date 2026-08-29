@@ -16,6 +16,9 @@ const DESTINATIONS = [
   { to: 'assessment', label: 'Assessment', scoped: true },
   { to: 'migration', label: 'Live migration', scoped: true },
   { to: 'sandbox', label: 'Sandbox & report', scoped: true },
+  // Not project-scoped: it is the user's own history across every project, and
+  // an admin's across every user.
+  { to: '/activity', label: 'Activity', scoped: false },
 ] as const;
 
 export function Nav({ project }: { project?: Project | null }) {

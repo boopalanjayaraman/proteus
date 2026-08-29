@@ -27,6 +27,7 @@ export const COLLECTIONS = {
   sandboxDeployments: 'sandbox_deployments',
   humanGates: 'human_gates',
   events: 'events',
+  userActivity: 'user_activity',
   agentActions: 'agent_actions',
   artifacts: 'artifacts',
   counters: 'counters',
@@ -165,6 +166,25 @@ export const INDEXES: Record<CollectionName, IndexSpec[]> = {
     { name: 'project_seq_unique', key: { projectId: 1, seq: 1 }, unique: true },
     { name: 'project_level_seq', key: { projectId: 1, level: 1, seq: -1 } },
     { name: 'idempotency', key: { idempotencyKey: 1 }, unique: true, sparse: true },
+  ],
+
+  /**
+   * The one collection keyed by user rather than project — it is a user's own
+   * history, and a platform admin's view of everyone's.
+   */
+  [COLLECTIONS.userActivity]: [
+    { name: 'activityId_unique', key: { activityId: 1 }, unique: true },
+    // Cursor paging sorts by (at, activityId) descending, so the tiebreak is
+    // part of the index. Without it the sort spills to memory past 32MB.
+    { name: 'user_at', key: { userId: 1, at: -1, activityId: -1 } },
+    { name: 'all_at', key: { at: -1, activityId: -1 } },
+    { name: 'user_category_at', key: { userId: 1, category: 1, at: -1 } },
+    { name: 'project_at', key: { projectId: 1, at: -1 } },
+    // Collapses a page load's fan-out into one entry (see `navigationKey`).
+    { name: 'navigation_dedupe', key: { dedupeKey: 1 }, unique: true, sparse: true },
+    // Retention. Unlike events and verification results, which ARE the audit
+    // trail of a migration and never expire, this is operational history.
+    { name: 'ttl_180d', key: { at: 1 }, expireAfterSeconds: 60 * 60 * 24 * 180 },
   ],
 
   [COLLECTIONS.agentActions]: [

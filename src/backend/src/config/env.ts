@@ -193,6 +193,27 @@ const Firebase = z.object({
   FIREBASE_PROJECT_ID: nonEmpty,
 });
 
+/**
+ * User activity and the platform admin role (PRD-15).
+ *
+ * `PLATFORM_ADMIN_EMAILS` is the only way the role is granted, and it is
+ * reconciled at every `GET /me` — adding an address grants on that user's next
+ * request, removing one revokes. No endpoint grants it, because a request that
+ * makes the caller an administrator is a privilege-escalation path in a product
+ * whose whole claim is bounded autonomy (D-021).
+ *
+ * Retention is not here: the TTL lives in the shared schema's index definitions,
+ * which the browser bundle also imports and which cannot read the environment.
+ * Changing it is a `collMod`, not a restart.
+ */
+const Activity = z.object({
+  PLATFORM_ADMIN_EMAILS: z.string().trim().default(''),
+  /** A `GET /me` after this much idle time records SESSION_STARTED. */
+  ACTIVITY_SESSION_GAP_MINUTES: numeric.default(30),
+  /** Collapses one screen load's several API calls into a single page view. */
+  ACTIVITY_NAVIGATION_WINDOW_SECONDS: numeric.default(30),
+});
+
 // ---------------------------------------------------------------------------
 // Lazy, cached access
 // ---------------------------------------------------------------------------
@@ -252,6 +273,17 @@ export const githubConfig = memo(() => load(GitHub, 'repository defaults'));
 export const hostingConfig = memo(() => load(Hosting, 'build and sandbox hosting'));
 
 export const firebaseConfig = memo(() => load(Firebase, 'authentication'));
+
+/** Every value defaults; an empty admin list is a valid deployment, not a fault. */
+export const activityConfig = memo(() => load(Activity, 'user activity log'));
+
+/** `a@x.com, b@y.com` → `['a@x.com', 'b@y.com']`. Empty means no platform admin. */
+export function platformAdminEmails(): string[] {
+  return activityConfig()
+    .PLATFORM_ADMIN_EMAILS.split(',')
+    .map((e) => e.trim())
+    .filter(Boolean);
+}
 
 /**
  * Which features are configured. The startup banner prints this so a partly

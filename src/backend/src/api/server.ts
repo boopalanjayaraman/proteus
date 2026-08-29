@@ -4,6 +4,10 @@ import type { Project, SandboxDeployment } from '@proteus/schema';
 import type { Repositories } from '../core/repositories';
 import { installErrorHandler } from './errors';
 import { requireAuth, type TokenVerifier } from './middleware/auth';
+import { installActivityHooks } from './middleware/activity';
+import { setOwnershipRecorder } from './middleware/ownership';
+import { registerActivityRoutes } from './routes/activity';
+import { ActivityRecorder } from '../core/services/activity';
 import { registerEventRoutes } from './routes/events';
 import { registerHealthRoutes } from './routes/health';
 import { registerMaintenanceRoutes, registerMeRoutes } from './routes/me';
@@ -45,6 +49,8 @@ export interface ServerOptions {
     scanned: number; reclaimed: string[];
     failed: Array<{ projectId: string; reason: string }>;
   }>;
+  /** User activity. PRD-15 supplies it; constructed here when absent. */
+  activity?: ActivityRecorder;
 }
 
 /**
@@ -71,19 +77,27 @@ export async function buildServer(opts: ServerOptions): Promise<FastifyInstance>
   // Health is unauthenticated: a readiness probe has no credentials.
   registerHealthRoutes(app);
 
+  // Always present, because a route that records conditionally is a route that
+  // eventually stops recording. An empty admin list is a valid configuration.
+  const activity = opts.activity ?? new ActivityRecorder(opts.repos);
+  setOwnershipRecorder(activity);
+
   await app.register(async (authed) => {
     authed.addHook('preHandler', requireAuth(opts.verifier));
-    registerMeRoutes(authed, opts.repos);
+    // After requireAuth, so every hook and handler downstream has the uid.
+    installActivityHooks(authed, activity);
+    registerActivityRoutes(authed, opts.repos, activity);
+    registerMeRoutes(authed, opts.repos, activity);
     registerMaintenanceRoutes(authed, opts.repos, opts.sandboxSweep);
-    registerProjectRoutes(authed, opts.repos, opts.projects, opts.startDiscovery);
+    registerProjectRoutes(authed, opts.repos, opts.projects, opts.startDiscovery, activity);
     registerGraphRoutes(authed, opts.repos, opts.graph);
     registerAssessmentRoutes(
-      authed, opts.repos, opts.assessments, opts.blobs, opts.regenerateAssessment,
+      authed, opts.repos, opts.assessments, opts.blobs, opts.regenerateAssessment, activity,
     );
     registerMigrationRoutes(
       authed, opts.repos, opts.approvals, opts.blobs,
       opts.startMigration, opts.generateReport,
-      opts.capacity, opts.lifecycle, opts.deployerFor,
+      opts.capacity, opts.lifecycle, opts.deployerFor, activity,
     );
     registerEventRoutes(authed, opts.repos);
   });

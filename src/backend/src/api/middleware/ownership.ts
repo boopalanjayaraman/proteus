@@ -3,6 +3,19 @@ import type { FastifyRequest } from 'fastify';
 import type { Repositories } from '../../core/repositories';
 import { ApiError } from '../errors';
 import { currentUser } from './auth';
+import { activityContext } from './activity';
+import type { ActivityRecorder } from '../../core/services/activity';
+
+/**
+ * Set once at startup so every ownership check records without every call site
+ * having to pass a recorder through. A module-level handle is the wrong shape
+ * for a service with state; this one has none that matters, and the alternative
+ * is threading an optional parameter through forty call sites.
+ */
+let recorder: ActivityRecorder | undefined;
+export function setOwnershipRecorder(r: ActivityRecorder | undefined): void {
+  recorder = r;
+}
 
 /**
  * Every project is owned, and ownership is checked on the server.
@@ -29,6 +42,21 @@ export async function loadOwnedProject(
       { projectId, uid: user.uid, ownerId: project.ownerId },
       'project access denied — returning 404 so existence is not confirmed',
     );
+    // The entry most worth having. The caller is told nothing, which is the
+    // point of the 404 — but somebody reaching for a project that exists and
+    // is not theirs is exactly what an audit log is for, and the response
+    // being indistinguishable from "not found" is why it cannot be inferred
+    // from the access log afterwards.
+    const ctx = activityContext(req);
+    if (ctx && recorder) {
+      void recorder.record(ctx, {
+        action: 'ACCESS_DENIED',
+        summary: `Attempted to open project ${projectId}, which belongs to another user`,
+        target: projectId,
+        outcome: 'DENIED',
+        detail: { method: req.method, path: req.url.split('?')[0] ?? req.url },
+      });
+    }
     throw ApiError.notFound('Project');
   }
   return project;

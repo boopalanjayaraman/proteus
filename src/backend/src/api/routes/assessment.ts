@@ -5,6 +5,8 @@ import type { AssessmentService } from '../../core/services/assessment';
 import type { BlobStore } from '../../integrations/storage/blobs';
 import { ApiError } from '../errors';
 import { loadOwnedProject } from '../middleware/ownership';
+import { activityContext } from '../middleware/activity';
+import type { ActivityRecorder } from '../../core/services/activity';
 
 interface Params { id: string }
 interface ArtifactParams extends Params { artifactId: string }
@@ -19,7 +21,15 @@ export function registerAssessmentRoutes(
    * layer must not import `agent/`.
    */
   regenerate?: (projectId: string) => Promise<void>,
+  activity?: ActivityRecorder,
 ): void {
+  const record = (
+    req: Parameters<typeof activityContext>[0],
+    input: Parameters<ActivityRecorder['record']>[1],
+  ) => {
+    const ctx = activityContext(req);
+    if (ctx && activity) void activity.record(ctx, input);
+  };
   /**
    * The assessment screen, in one call.
    *
@@ -78,6 +88,11 @@ export function registerAssessmentRoutes(
     }
     if (!regenerate) throw ApiError.badRequest('Assessment generation is not configured.');
     await regenerate(req.params.id);
+    record(req, {
+      action: 'ASSESSMENT_REGENERATED',
+      summary: `Regenerated the assessment for ${project.name}`,
+      projectId: req.params.id,
+    });
     return reply.status(202).send({ status: 'GENERATING' });
   });
 
@@ -109,6 +124,16 @@ export function registerAssessmentRoutes(
     const body = await blobs.get(path);
     const extension = artifact.format === 'MARKDOWN' ? 'md' : artifact.format.toLowerCase();
 
+    // Recorded before the bytes go out: a download that fails mid-stream still
+    // handed the caller the start of the file, and the request was authorised.
+    record(req, {
+      action: DOWNLOAD_ACTION[artifact.kind] ?? 'REPORT_DOWNLOADED',
+      summary: `Downloaded ${artifact.title}`,
+      target: artifact.title,
+      projectId: req.params.id,
+      detail: { kind: artifact.kind, format: artifact.format, bytes: body.length },
+    });
+
     return reply
       .header('content-type', CONTENT_TYPES[artifact.format])
       .header(
@@ -118,6 +143,20 @@ export function registerAssessmentRoutes(
       .send(body);
   });
 }
+
+/**
+ * Which artifact was taken, not just that something was.
+ *
+ * "Downloaded the evidence package" and "downloaded the diff" answer different
+ * questions in a review, so they are different actions rather than one action
+ * with a detail field nobody filters on.
+ */
+const DOWNLOAD_ACTION: Record<string, 'REPORT_DOWNLOADED' | 'DIFF_DOWNLOADED' | 'EVIDENCE_DOWNLOADED'> = {
+  ASSESSMENT_REPORT: 'REPORT_DOWNLOADED',
+  MIGRATION_REPORT: 'REPORT_DOWNLOADED',
+  GIT_DIFF: 'DIFF_DOWNLOADED',
+  BUILD_TEST_EVIDENCE: 'EVIDENCE_DOWNLOADED',
+};
 
 const CONTENT_TYPES: Record<string, string> = {
   MARKDOWN: 'text/markdown; charset=utf-8',

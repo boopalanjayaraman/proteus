@@ -5,6 +5,8 @@ import type { Repositories } from '../../core/repositories';
 import { ApiError } from '../errors';
 import { currentUser } from '../middleware/auth';
 import { loadOwnedProject } from '../middleware/ownership';
+import { activityContext } from '../middleware/activity';
+import type { ActivityRecorder } from '../../core/services/activity';
 
 /**
  * Project routes.
@@ -58,7 +60,16 @@ export function registerProjectRoutes(
    * run outlives this request, and the client watches it over SSE.
    */
   startDiscovery?: (project: Project) => void,
+  activity?: ActivityRecorder,
 ): void {
+  /** Records against the request, or does nothing. Never awaited (FR-5). */
+  const record = (
+    req: Parameters<typeof activityContext>[0],
+    input: Parameters<ActivityRecorder['record']>[1],
+  ) => {
+    const ctx = activityContext(req);
+    if (ctx && activity) void activity.record(ctx, input);
+  };
   /** What the create screen must ask the user to grant (UX v1.2). */
   app.get('/projects/required-scopes', async () => ({ scopes: REQUIRED_GITHUB_SCOPES }));
 
@@ -87,6 +98,37 @@ export function registerProjectRoutes(
 
     const project = await service.create(user.uid, parsed.data, files);
     req.log.info({ projectId: project.projectId, files: files.length }, 'project created');
+
+    record(req, {
+      action: 'PROJECT_CREATED',
+      summary: `Created project ${project.name}`,
+      target: project.repository.url,
+      projectId: project.projectId,
+      detail: { files: files.length, branch: project.repository.defaultBranch },
+    });
+    // A separate entry, because "a credential was stored for this project" is
+    // the fact an auditor looks for and it should not be buried in a creation
+    // detail. The prefix is what the UI already shows; the token is never here.
+    record(req, {
+      action: 'TOKEN_STORED',
+      summary: 'Stored a repository access token in Secret Manager',
+      target: project.repository.credential?.displayPrefix ?? 'github-pat',
+      projectId: project.projectId,
+    });
+    if (files.length > 0) {
+      record(req, {
+        action: 'FILES_UPLOADED',
+        summary: `Uploaded ${files.length} context file${files.length === 1 ? '' : 's'}`,
+        projectId: project.projectId,
+        detail: { count: files.length },
+      });
+    }
+    record(req, {
+      action: 'DISCOVERY_STARTED',
+      summary: 'Started discovery',
+      projectId: project.projectId,
+    });
+
     startDiscovery?.(project);
     return reply.status(201).send(present(project));
   });
@@ -128,6 +170,13 @@ export function registerProjectRoutes(
         mimeType: req.body.mimeType,
         data: Buffer.from(req.body.contentBase64, 'base64'),
       });
+      record(req, {
+        action: 'FILES_UPLOADED',
+        summary: `Uploaded ${req.body.originalName}`,
+        target: req.body.originalName,
+        projectId: req.params.id,
+        detail: { kind: kind.data },
+      });
       return reply.status(201).send(file);
     },
   );
@@ -136,6 +185,13 @@ export function registerProjectRoutes(
     await loadOwnedProject(repos, req, req.params.id);
     await service.delete(req.params.id);
     req.log.info({ projectId: req.params.id }, 'project deleted, credential destroyed');
+    // Outlives what it describes: the project is gone and this row is the only
+    // remaining record that it existed and who removed it.
+    record(req, {
+      action: 'PROJECT_DELETED',
+      summary: `Deleted project ${req.params.id}`,
+      projectId: req.params.id,
+    });
     return reply.status(204).send();
   });
 }

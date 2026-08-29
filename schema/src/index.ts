@@ -21,5 +21,6 @@ export * from './assessment';
 export * from './migration';
 export * from './verification';
 export * from './governance';
+export * from './activity';
 export * from './collections';
 export * from './rules';
