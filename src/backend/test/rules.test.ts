@@ -18,7 +18,7 @@ const engine = RuleEngine.fromFiles(
 
 describe('ruleset loading', () => {
   it('loads both files and enforces the gating discipline at load', () => {
-    expect(engine.counts).toEqual({ standards: 40, execution: 70 });
+    expect(engine.counts).toEqual({ standards: 40, execution: 73 });
   });
 
   it('exposes the retry budget from the policy block', () => {

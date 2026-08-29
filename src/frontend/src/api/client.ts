@@ -1,5 +1,6 @@
 import type {
-  Evidence, GraphEdge, GraphNode, GraphStyle, Project, ProjectEvent, User,
+  Artifact, Assessment, Evidence, Finding, GraphEdge, GraphNode, GraphStyle,
+  Project, ProjectEvent, Recommendation, User,
 } from '@proteus/schema';
 
 /**
@@ -126,6 +127,51 @@ export class ApiClient {
         body: JSON.stringify(pin),
       },
     );
+  };
+
+  /**
+   * The whole assessment screen in one call. Findings, plan and recommendations
+   * arrive together because the screen means nothing with any one missing.
+   */
+  assessment = (projectId: string, version?: number) =>
+    this.request<{
+      assessment: Assessment;
+      findings: Finding[];
+      recommendations: Recommendation[];
+      versions: Array<{ version: number; status: string; generatedAt: string }>;
+    }>(`/projects/${projectId}/assessment${version ? `?version=${version}` : ''}`);
+
+  /** Regeneration produces version N+1; it never edits what was on screen. */
+  regenerateAssessment = (projectId: string) =>
+    this.request<{ status: string }>(`/projects/${projectId}/assessment`, { method: 'POST', body: '{}' });
+
+  artifacts = (projectId: string) =>
+    this.request<{ artifacts: Artifact[] }>(`/projects/${projectId}/artifacts`);
+
+  /** The download URL. Authenticated, so the click goes through `download`. */
+  artifactUrl = (projectId: string, artifactId: string) =>
+    `${this.baseUrl}/projects/${projectId}/artifacts/${artifactId}`;
+
+  /**
+   * Fetches an artifact and hands it to the browser as a file.
+   *
+   * A plain link cannot carry the Authorization header, and putting a token in
+   * a query string would put it in logs and history.
+   */
+  download = async (projectId: string, artifact: Artifact): Promise<void> => {
+    const token = await this.token();
+    const res = await fetch(this.artifactUrl(projectId, artifact.artifactId), {
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new ApiClientError(res.status, 'DOWNLOAD_FAILED', res.statusText);
+
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${artifact.title.replace(/[^\w.-]+/g, '-')}.`
+      + (artifact.format === 'MARKDOWN' ? 'md' : artifact.format.toLowerCase());
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   streamUrl = (projectId: string) => `${this.baseUrl}/projects/${projectId}/stream`;

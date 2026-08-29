@@ -87,7 +87,7 @@ evidence, and observed facts are visibly distinct from inferred ones.
 | ID | Criterion | Verified by |
 |---|---|---|
 | AC-1 | Asserting the same HSM from three documents yields one node with three evidence records | test |
-| AC-2 | The reference scenario produces 15 nodes and 16 edges | test |
+| AC-2 | The reference scenario produces 14 nodes and 15 edges | test |
 | AC-3 | Refresh mid-discovery restores the graph identically, including node order | screen |
 | AC-4 | Inferred edges render dashed; observed solid | screen |
 | AC-5 | Switching style recomputes positions without a server call | screen |
@@ -126,10 +126,13 @@ evidence, and observed facts are visibly distinct from inferred ones.
 
 **Deviations from plan**
 
-- **AC-2 is 15 nodes and 16 edges, not 14 and 15.** The number in §7 came from the UX
-  mock; this is what the fixture actually produces. The test asserts the type breakdown
-  as well as the total, so a refactor that keeps the count but loses `PROTOCOL` or
-  `CERTIFICATE` still fails.
+- **AC-2 landed on 15 nodes and 16 edges, and PRD-09 brought it back to 14 and 15.**
+  The extra node was a `pom` "source component" emitted by `EXEC-DET-005`, which is a
+  locator rule that explicitly defers capability to the registry rather than classifying
+  anything. Once the dependency pass wrote that finding properly, the duplicate candidate
+  went away and the graph matched the figure in §7 after all. The test asserts the type
+  breakdown as well as the total, so a refactor that keeps the count but loses `PROTOCOL`
+  or `CERTIFICATE` still fails.
 - **`core/discovery/environment.ts` was not in the plan.** The code scan found 8 candidates
   in 6 files and no certificate, protocol or external service — because none of those call
   `Cipher.getInstance`. A PQC graph without the TLS edge, the certificate and the acquirer

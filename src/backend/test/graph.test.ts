@@ -99,13 +99,13 @@ describe('AC-2 · the reference scenario', () => {
 
     // The shape that matters, rather than a single total that any refactor of
     // detection would break for the wrong reason.
-    expect(counts).toEqual({ nodes: 15, edges: 16 });
+    expect(counts).toEqual({ nodes: 14, edges: 15 });
 
     // The shape, not just the total — a total alone would go on passing while
     // the graph lost the node types the screen is built around.
     const byType = (t: string) => nodes.filter((n) => n.type === t).length;
     expect(byType('SERVICE')).toBe(1);
-    expect(byType('SOURCE_COMPONENT')).toBe(6);
+    expect(byType('SOURCE_COMPONENT')).toBe(5);
     expect(byType('ALGORITHM')).toBe(2);
     expect(byType('CRYPTO_IMPLEMENTATION')).toBe(1);
     expect(byType('CRYPTO_LIBRARY')).toBe(2);

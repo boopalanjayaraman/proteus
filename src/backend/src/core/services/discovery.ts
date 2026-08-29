@@ -5,7 +5,7 @@ import {
 import type { Candidate, DetectionResult, DependencyFinding } from '../discovery/detect';
 import type { EnvironmentFact } from '../discovery/environment';
 import type { Repositories } from '../repositories';
-import { buildGraph } from './graphBuilder';
+import { buildGraph, componentName, componentType } from './graphBuilder';
 import { GraphService } from './graph';
 
 /**
@@ -177,7 +177,9 @@ export class DiscoveryService {
         disposition: 'NEEDS_FURTHER_INVESTIGATION',
         agentIntent: 'Pending assessment.',
         locations: [{ path: c.path, startLine: c.line }],
-        nodeIds: [makeNodeId('SOURCE_COMPONENT', c.path.split('/').pop() ?? c.path)],
+        // The same derivation the graph builder uses, so the finding and the
+        // node it points at cannot disagree about the component's name.
+        nodeIds: [makeNodeId(componentType(c.path), componentName(c.path))],
         evidenceIds: [evidenceId],
         primaryEvidenceId: evidenceId,
         origin: 'REPOSITORY_SCAN',
@@ -192,6 +194,47 @@ export class DiscoveryService {
 
     for (const d of dependencies) {
       if (d.capability.capability === 'SUPPORTED') continue;
+
+      // A finding, not just a feed row. The provider version is the second of the
+      // two autonomous items in the reference scenario (spec §17), and a
+      // dependency that only ever appears in the activity feed cannot be
+      // dispositioned, planned or approved.
+      const dedupeKey = `dep:${d.dependencyName}:${d.version}`;
+      const existingDep = await this.repos.findings.findOne({ projectId, dedupeKey } as never);
+      if (!existingDep) {
+        const at = new Date();
+        const evidenceId = await this.saveEvidence(projectId, {
+          evidenceType: 'DEPENDENCY', evidenceClass: 'OBSERVED', confidence: 1,
+          source: `${d.path}:${d.line}`,
+          locator: { kind: 'REPO', path: d.path, startLine: d.line, commitSha: '0000000' },
+          excerpt: d.capability.reason,
+        });
+        await this.repos.findings.insert({
+          _schemaVersion: 1, createdAt: at, updatedAt: at,
+          findingId: `f_${projectId}_dep_${d.dependencyName.replace(/[^a-z0-9]/gi, '')}`,
+          projectId,
+          category: 'APPLICATION',
+          title: `${d.dependencyName} ${d.version}`,
+          summaryLine: d.capability.capability === 'NOT_SUPPORTED'
+            ? `${d.dependencyName} ${d.version} → approved compatible version`
+            : 'Provider capability not established',
+          description: d.capability.reason,
+          severity: d.capability.capability === 'NOT_SUPPORTED' ? 'HIGH' : 'MEDIUM',
+          impact: d.capability.capability === 'NOT_SUPPORTED'
+            ? 'MIGRATION_LIKELY' : 'DEPENDENCY_REQUIRES_INVESTIGATION',
+          disposition: 'NEEDS_FURTHER_INVESTIGATION',
+          agentIntent: 'Pending assessment.',
+          locations: [{ path: d.path, startLine: d.line }],
+          nodeIds: [makeNodeId('CRYPTO_LIBRARY', `${d.dependencyName} ${d.version}`)],
+          evidenceIds: [evidenceId],
+          primaryEvidenceId: evidenceId,
+          origin: 'REPOSITORY_SCAN',
+          status: 'OPEN',
+          dedupeKey,
+          discoveredAt: at,
+        } as never);
+      }
+
       await this.repos.events.emit(projectId, {
         type: 'DEPENDENCY_DISCOVERED', phase: 'DISCOVERY', level: 'ACTIVITY',
         severity: d.capability.capability === 'UNKNOWN' ? 'WARN' : 'INFO',
@@ -262,6 +305,79 @@ export class DiscoveryService {
       } as never,
     });
     return counts;
+  }
+
+  /**
+   * Findings for the cryptography a repository declares rather than calls.
+   *
+   * The graph already shows these; the findings list must too, or the assessment
+   * silently omits the certificate and the partner boundary — two of the items a
+   * PQC reviewer is specifically looking for. It also makes EXEC-DISP-006 and
+   * EXEC-DISP-008 reachable: a disposition rule keyed on a node type needs a
+   * finding pointing at that node to run against.
+   */
+  async persistEnvironment(
+    projectId: string,
+    facts: EnvironmentFact[],
+  ): Promise<{ findings: number }> {
+    let written = 0;
+
+    for (const f of facts) {
+      const dedupeKey = `env:${f.kind}:${f.name}`;
+      const existing = await this.repos.findings.findOne({ projectId, dedupeKey } as never);
+      const evidenceId = await this.saveEvidence(projectId, f.evidence);
+
+      if (existing) {
+        await this.repos.findings.collection.updateOne(
+          { findingId: existing.findingId } as never,
+          { $addToSet: { evidenceIds: evidenceId } as never, $set: { updatedAt: new Date() } as never },
+        );
+        continue;
+      }
+
+      const now = new Date();
+      const nodeId = makeNodeId(f.kind, f.name);
+      await this.repos.findings.insert({
+        _schemaVersion: 1, createdAt: now, updatedAt: now,
+        findingId: `f_${projectId}_env_${f.kind.toLowerCase()}_${written}`,
+        projectId,
+        category: f.kind === 'CERTIFICATE' ? 'CRYPTOGRAPHIC' : 'APPLICATION',
+        title: f.kind === 'CERTIFICATE'
+          ? `Certificate ${f.name}`
+          : f.kind === 'PROTOCOL' ? `Transport protocol ${f.name}` : `External boundary ${f.name}`,
+        summaryLine: f.detail || f.kind.replace(/_/g, ' ').toLowerCase(),
+        description: f.note,
+        // The usage is what makes the disposition rules reachable, and it is
+        // read from the file rather than assumed: a certificate is validated, a
+        // protocol establishes keys, a boundary is where one is handed over.
+        crypto: f.kind === 'CERTIFICATE'
+          ? { algorithm: f.detail.split(' · ')[0] ?? 'unknown', usage: 'CERTIFICATE_VALIDATION',
+              quantumVulnerable: f.quantumVulnerable }
+          : f.kind === 'PROTOCOL'
+          ? { algorithm: f.name, usage: 'KEY_ESTABLISHMENT', quantumVulnerable: f.quantumVulnerable }
+          : undefined,
+        severity: f.quantumVulnerable ? 'MEDIUM' : 'INFO',
+        impact: f.quantumVulnerable ? 'MIGRATION_LIKELY' : 'NO_PQC_CHANGE_REQUIRED',
+        disposition: 'NEEDS_FURTHER_INVESTIGATION',
+        agentIntent: 'Pending assessment.',
+        locations: [{ path: f.path, startLine: f.line }],
+        nodeIds: [nodeId],
+        evidenceIds: [evidenceId],
+        primaryEvidenceId: evidenceId,
+        origin: 'REPOSITORY_SCAN',
+        status: 'OPEN',
+        dedupeKey,
+        discoveredAt: now,
+      } as never);
+      written++;
+    }
+
+    if (written > 0) {
+      await this.repos.projects.collection.updateOne({ projectId } as never, {
+        $set: { 'summary.counts.findings': await this.repos.findings.count({ projectId } as never) } as never,
+      });
+    }
+    return { findings: written };
   }
 
   async saveEvidence(projectId: string, input: EvidenceInput): Promise<string> {

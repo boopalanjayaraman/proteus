@@ -310,3 +310,110 @@ describe('PRD-08 · graph endpoints', () => {
     expect((await r.json()).upstream).toEqual([api.id]);
   });
 });
+
+describe('PRD-09 · assessment endpoints', () => {
+  it('404s before an assessment exists, rather than returning an empty one', async () => {
+    const p = await ownedProject();
+    const r = await fetch(`${s.url}/projects/${p.projectId}/assessment`, { headers: authFor(OWNER) });
+    expect(r.status).toBe(404);
+  });
+
+  it("hides another user's assessment and recommendations behind a 404", async () => {
+    const p = await ownedProject(OWNER);
+    for (const path of ['assessment', 'recommendations', 'artifacts']) {
+      const r = await fetch(`${s.url}/projects/${p.projectId}/${path}`, { headers: authFor(OTHER) });
+      expect(r.status, path).toBe(404);
+    }
+  });
+
+  it('refuses to generate before discovery has completed', async () => {
+    const p = await ownedProject();
+    const r = await fetch(`${s.url}/projects/${p.projectId}/assessment`, {
+      method: 'POST', headers: { ...authFor(OWNER), 'content-type': 'application/json' }, body: '{}',
+    });
+    // Either the guard or the missing generator; both are a 400, and neither
+    // may silently produce an assessment from nothing.
+    expect(r.status).toBe(400);
+  });
+
+  it('returns findings and recommendations alongside the assessment', async () => {
+    const p = await ownedProject();
+    const now = new Date();
+    await t.repos.findings.insert({
+      _schemaVersion: 1, createdAt: now, updatedAt: now,
+      findingId: 'f_1', projectId: p.projectId, category: 'CRYPTOGRAPHIC',
+      title: 'RSA-2048 used for key establishment', summaryLine: 'Usage: key transport',
+      description: 'd', severity: 'CRITICAL', impact: 'MIGRATION_REQUIRED',
+      disposition: 'AUTONOMOUS_MIGRATION', agentIntent: 'Replace with ML-KEM-768.',
+      locations: [], nodeIds: [], evidenceIds: [], origin: 'REPOSITORY_SCAN',
+      status: 'OPEN', dedupeKey: 'k1', discoveredAt: now,
+    } as never);
+    await t.repos.assessments.insert({
+      _schemaVersion: 1, createdAt: now, updatedAt: now,
+      assessmentId: 'asmt_1', projectId: p.projectId, version: 1,
+      summary: {
+        headline: 'h', whatExists: 'e', whatIsVulnerable: 'v',
+        whatAgentWillChange: 'c', whatAgentWillNotChange: 'n',
+      },
+      snapshot: {
+        findingIds: ['f_1'], recommendationIds: [], graphNodeIds: [], graphEdgeIds: [],
+        inputFileIds: [], repoCommitSha: 'abc1234',
+      },
+      planItems: [], policyId: 'p', status: 'READY', generatedAt: now,
+    } as never);
+
+    const r = await fetch(`${s.url}/projects/${p.projectId}/assessment`, { headers: authFor(OWNER) });
+    expect(r.status).toBe(200);
+    const body = await r.json();
+    expect(body.assessment.version).toBe(1);
+    expect(body.findings).toHaveLength(1);
+    expect(body.findings[0].agentIntent).toBe('Replace with ML-KEM-768.');
+    expect(body.versions).toEqual([expect.objectContaining({ version: 1, status: 'READY' })]);
+  });
+
+  it('downloads a report as an attachment and 404s an artifact from another project', async () => {
+    const p = await ownedProject();
+    const other = await ownedProject();
+    const now = new Date();
+    const stored = await s.blobs.put(
+      `${p.projectId}/reports/assessment-v1.md`, Buffer.from('# PQC assessment\n'),
+    );
+    await t.repos.artifacts.insert({
+      _schemaVersion: 1, createdAt: now, updatedAt: now,
+      artifactId: 'art_1', projectId: p.projectId,
+      kind: 'ASSESSMENT_REPORT', format: 'MARKDOWN', title: 'Assessment report v1',
+      displayMeta: '1 FINDINGS', gcsUri: stored.gcsUri, sizeBytes: stored.sizeBytes,
+      status: 'READY', generatedAt: now,
+    } as never);
+
+    const r = await fetch(`${s.url}/projects/${p.projectId}/artifacts/art_1`, { headers: authFor(OWNER) });
+    expect(r.status).toBe(200);
+    expect(r.headers.get('content-type')).toContain('text/markdown');
+    expect(r.headers.get('content-disposition')).toContain('attachment');
+    expect(await r.text()).toContain('# PQC assessment');
+
+    // Scoped by project as well as id — owning one project must not open another's.
+    expect((await fetch(`${s.url}/projects/${other.projectId}/artifacts/art_1`, {
+      headers: authFor(OWNER),
+    })).status).toBe(404);
+  });
+
+  it('omits the full report body from the artifact listing', async () => {
+    const p = await ownedProject();
+    const now = new Date();
+    await t.repos.artifacts.insert({
+      _schemaVersion: 1, createdAt: now, updatedAt: now,
+      artifactId: 'art_2', projectId: p.projectId,
+      kind: 'ASSESSMENT_REPORT', format: 'MARKDOWN', title: 'Assessment report v1',
+      displayMeta: '1 FINDINGS', gcsUri: 'gs://bucket/x.md', sizeBytes: 10,
+      contentSnapshot: { findings: [{ title: 'a very large report body' }] },
+      status: 'READY', generatedAt: now,
+    } as never);
+
+    const body = await (await fetch(`${s.url}/projects/${p.projectId}/artifacts`, {
+      headers: authFor(OWNER),
+    })).json();
+    expect(body.artifacts[0].artifactId).toBe('art_2');
+    expect(body.artifacts[0].contentSnapshot).toBeUndefined();
+  });
+});

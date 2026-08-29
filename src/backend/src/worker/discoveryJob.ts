@@ -33,6 +33,12 @@ export interface DiscoveryJobDeps {
   model: ModelClient;
   github?: GitHubReader;
   logger: Logger;
+  /**
+   * Runs after discovery completes. Injected rather than called directly so a
+   * test can exercise discovery without a model, and so the two jobs stay
+   * separately runnable — a re-assessment must not require a re-clone.
+   */
+  onComplete?: (project: Project) => Promise<void>;
 }
 
 export async function runDiscovery(project: Project, deps: DiscoveryJobDeps): Promise<void> {
@@ -58,7 +64,7 @@ export async function runDiscovery(project: Project, deps: DiscoveryJobDeps): Pr
     await discovery.advance(run, 'INSPECTING_STRUCTURE', 'Reading the build manifest');
     const profile = await detectProfile(wc);
     await repos.projects.collection.updateOne({ projectId: project.projectId } as never, {
-      $set: { 'repository.commitSha': checkout.commitSha, profile } as never,
+      $set: { 'repository.baseCommitSha': checkout.commitSha, 'repository.profile': profile } as never,
     });
     await repos.events.emit(project.projectId, {
       type: 'REPOSITORY_CLONED', phase: 'DISCOVERY', level: 'MILESTONE', severity: 'INFO',
@@ -93,6 +99,7 @@ export async function runDiscovery(project: Project, deps: DiscoveryJobDeps): Pr
     }
 
     const { links } = await discovery.persistCandidates(project.projectId, result, dependencies);
+    await discovery.persistEnvironment(project.projectId, environment);
 
     await discovery.buildGraph(run, {
       profile,
@@ -106,6 +113,10 @@ export async function runDiscovery(project: Project, deps: DiscoveryJobDeps): Pr
     await discovery.advance(run, 'GENERATING_ASSESSMENT', 'Checking the evidence is sufficient');
     const verdict = await agent.isSufficient(result.candidates, dependencies, result.filesScanned);
     await discovery.complete(run, verdict.reasoning);
+
+    // Assessment follows immediately: spec §13 hands over without asking, and
+    // the one human gate is at approval, not here.
+    await deps.onComplete?.(project);
   } catch (e) {
     log.error({ err: e }, 'discovery failed');
     await discovery.fail(run, e instanceof Error ? e.message : String(e));

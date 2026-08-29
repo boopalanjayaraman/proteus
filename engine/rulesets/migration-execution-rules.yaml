@@ -1562,6 +1562,81 @@ rules:
       key-transport migration — the two are independent — but it ages out with the wider PKI
       and must not vanish from the report because it was out of scope.
 
+  - ruleId: EXEC-DISP-011
+    family: DISPOSITION
+    title: A declared crypto provider that predates the approved target is an autonomous upgrade
+    provenance: SPEC_DERIVED
+    specSection: "§17, §18"
+    gating: true
+    stage: CORRELATING
+    when:
+      nodeType: CRYPTO_LIBRARY
+      location: MANIFEST
+      dependencyCapability: NOT_SUPPORTED
+    then:
+      disposition: AUTONOMOUS_MIGRATION
+      autonomyBoundary: INSIDE
+    prohibitedActions: []
+    rationale: >-
+      Spec §17 names "Crypto dependency -> Autonomous update -> Upgrade to approved compatible
+      library version" as a plan item in its own right, and it is the second of the two
+      autonomous items in the reference scenario. EXEC-DISP-009 cannot reach it: a declared
+      dependency has a version, not a usage, so `usageIn: [KEY_ESTABLISHMENT, KEY_TRANSPORT]`
+      never matches and the finding would otherwise carry no disposition at all. Autonomous
+      because the discriminator is deterministic — the provider capability registry
+      establishes the version from which the target parameter set is available, and a
+      declared version below it is a fact about the manifest, not a judgement. Scoped to
+      MANIFEST so it can only ever propose editing a dependency declaration.
+
+  - ruleId: EXEC-DISP-012
+    family: DISPOSITION
+    title: A crypto provider whose capability is unestablished needs investigation
+    provenance: STANDARDS_DERIVED
+    derivedFrom: [CISA-ACDI-2-003]
+    gating: true
+    stage: CORRELATING
+    when:
+      nodeType: CRYPTO_LIBRARY
+      dependencyCapability: UNKNOWN
+    then:
+      disposition: NEEDS_FURTHER_INVESTIGATION
+      autonomyBoundary: OUTSIDE
+      recommendationDisposition: VENDOR_DECISION
+      subtype: CAPABILITY_NOT_DECLARED
+      suggestedOwner: "Platform engineering · vendor management"
+    prohibitedActions: [UPGRADE_DEPENDENCY, ASSUME_CAPABILITY]
+    rationale: >-
+      The same distinction EXEC-DISP-004 draws for hardware, applied to software. A library
+      absent from the capability registry has not been shown to lack PQC support — it has
+      been shown that nobody established whether it has any. Upgrading on that basis would
+      be the ASSUME_CAPABILITY the rule forbids, so the item goes to a human with an owner
+      rather than into the approved scope.
+
+  - ruleId: EXEC-DISP-010
+    family: DISPOSITION
+    title: Quantum-vulnerable cryptography whose usage is undetermined needs investigation
+    provenance: SPEC_DERIVED
+    specSection: "§18"
+    gating: true
+    stage: CORRELATING
+    when:
+      quantumVulnerable: true
+      usage: UNKNOWN
+    then:
+      disposition: NEEDS_FURTHER_INVESTIGATION
+      autonomyBoundary: OUTSIDE
+    prohibitedActions: [REPLACE_ALGORITHM, MODIFY_SOURCE]
+    rationale: >-
+      Evaluated immediately before EXEC-DISP-009 and mutually exclusive with it: 009 requires
+      a determined usage, this requires an undetermined one. Without it, a quantum-vulnerable
+      key generation the scanner could not classify — `KeyPairGenerator.getInstance("RSA")`
+      with no call site nearby — falls through every disposition rule and reaches Screen 3
+      carrying no proposed action at all. That is the one outcome the disposition family
+      must not produce: spec §18 requires every finding to have a disposition, and
+      NEEDS_FURTHER_INVESTIGATION is the honest one when the code does not say what the
+      cryptography is for. Deliberately not AUTONOMOUS_MIGRATION — an ambiguous usage is
+      exactly the case where an autonomous substitution would be wrong.
+
   - ruleId: EXEC-DISP-009
     family: DISPOSITION
     title: In-repository key establishment with an approved target is autonomous

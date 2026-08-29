@@ -3,6 +3,7 @@ import pino from 'pino';
 import { buildServer } from '../../src/api/server';
 import type { AuthenticatedUser, TokenVerifier } from '../../src/api/middleware/auth';
 import type { Repositories } from '../../src/core/repositories';
+import { AssessmentService } from '../../src/core/services/assessment';
 import { GraphService } from '../../src/core/services/graph';
 import { ProjectService } from '../../src/core/services/projects';
 import { InMemorySecretVault } from '../../src/integrations/secrets/vault';
@@ -32,6 +33,7 @@ export interface TestServer {
   blobs: InMemoryBlobStore;
   projects: ProjectService;
   graph: GraphService;
+  assessments: AssessmentService;
   stop: () => Promise<void>;
 }
 
@@ -40,11 +42,14 @@ export async function startTestServer(repos: Repositories): Promise<TestServer> 
   const blobs = new InMemoryBlobStore();
   const projects = new ProjectService(repos, vault, blobs);
   const graph = new GraphService(repos);
+  const assessments = new AssessmentService(repos);
 
   const app = await buildServer({
     repos,
     projects,
     graph,
+    assessments,
+    blobs,
     verifier: new StubVerifier(),
     logger: pino({ level: 'silent' }),
   });
@@ -53,7 +58,7 @@ export async function startTestServer(repos: Repositories): Promise<TestServer> 
   const port = typeof addr === 'object' && addr ? addr.port : 0;
   return {
     url: `http://127.0.0.1:${port}`,
-    app, vault, blobs, projects, graph,
+    app, vault, blobs, projects, graph, assessments,
     stop: () => app.close(),
   };
 }

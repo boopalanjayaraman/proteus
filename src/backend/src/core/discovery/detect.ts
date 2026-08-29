@@ -1,6 +1,7 @@
 import {
   makeFindingDedupeKey, type CryptoUsage, type EvidenceInput, type Severity,
 } from '@proteus/schema';
+import { classifyAlgorithm } from '../rules/assess';
 import type { RuleEngine } from '../rules/engine';
 import { capabilityOf } from './providers';
 import type { WorkingCopy } from './workingCopy';
@@ -52,6 +53,8 @@ interface DetectionRule {
   impliesUsage: CryptoUsage;
   strength: 'STRONG' | 'WEAK';
   requiresInvestigation: boolean;
+  /** The rule locates dependencies and defers their capability to the registry. */
+  capabilityLookup: boolean;
 }
 
 /** Reads the DETECTION_SIGNATURE family out of the ruleset. */
@@ -77,9 +80,38 @@ export function detectionRules(engine: RuleEngine): DetectionRule[] {
         impliesUsage: (t['impliesUsage'] as CryptoUsage) ?? 'UNKNOWN',
         strength: t['strength'] === 'STRONG' ? 'STRONG' : 'WEAK',
         requiresInvestigation: t['requiresInvestigation'] === true,
+        // A rule that defers to the capability registry is a locator, not a
+        // classifier: EXEC-DET-005 says where provider dependencies are declared
+        // and explicitly refuses to infer capability from the version. The
+        // dependency pass resolves it against the registry and writes the
+        // finding, so emitting a second candidate here would duplicate it —
+        // once with an answer, once without one.
+        capabilityLookup: typeof t['capabilityLookup'] === 'string',
       } satisfies DetectionRule;
     })
     .filter((r) => r.patterns.length > 0);
+}
+
+/**
+ * The primitive inside a JCA algorithm string.
+ *
+ * `Cipher.getInstance` and `Signature.getInstance` take transform names, not
+ * algorithm names: "RSA/ECB/OAEPWithSHA-256AndMGF1Padding" and "SHA256withRSA"
+ * are both RSA. The classification rules match on the primitive, and matching
+ * them against the raw transform gets both wrong — the first fails
+ * `^(RSA|DH|ECDH|MQV)($|[-_])` because the next character is a slash, and the
+ * second matches `^(AES|SHA|...)` and is classified as a hash.
+ *
+ * The full transform is kept as the finding's algorithm; this is only what the
+ * rules are asked about.
+ */
+export function primitiveOf(algorithm: string | undefined): string | undefined {
+  if (!algorithm) return undefined;
+  // "SHA256withRSA", "SHA256WithRSAEncryption" -> RSA
+  const signature = /^[A-Za-z0-9-]+with([A-Za-z0-9]+?)(Encryption)?$/i.exec(algorithm);
+  if (signature) return signature[1];
+  // "RSA/ECB/OAEPWithSHA-256AndMGF1Padding" -> RSA
+  return algorithm.split('/')[0];
 }
 
 export async function detect(
@@ -108,6 +140,8 @@ export async function detect(
       if (rule.requireAll && !allPresent) continue;
       if (rule.exclude.some((p) => p.test(content))) continue;
 
+      if (rule.capabilityLookup) continue;
+
       const anchor = rule.patterns[0]!;
       lines.forEach((text, i) => {
         if (!anchor.test(text)) return;
@@ -117,6 +151,17 @@ export async function detect(
 
         const line = i + 1;
         const algorithm = extractAlgorithm(content, text);
+
+        // Classification comes from the standards, not from a regex here, so
+        // every finding's severity is attributable to a rule with a quote.
+        const usage = rule.strength === 'STRONG' ? rule.impliesUsage : 'UNKNOWN';
+        const classification = algorithm
+          ? classifyAlgorithm(engine, {
+              algorithm: primitiveOf(algorithm),
+              usage,
+              usages: [usage],
+            })
+          : null;
 
         // Production Java names its transform in a constant, so the pattern
         // matches the call and the rule says what it must resolve to. Without
@@ -130,14 +175,19 @@ export async function detect(
           matchedText: text.trim(),
           algorithm,
           keySize: extractKeySize(content, algorithm),
-          usage: rule.strength === 'STRONG' ? rule.impliesUsage : 'UNKNOWN',
+          usage,
           strength: rule.strength,
-          severity: rule.strength === 'STRONG' ? 'CRITICAL' : 'MEDIUM',
-          quantumVulnerable: /^(RSA|EC|DH|DSA)/i.test(algorithm ?? ''),
+          severity: classification?.severity
+            ?? (rule.strength === 'STRONG' ? 'CRITICAL' : 'MEDIUM'),
+          quantumVulnerable: classification?.quantumVulnerable
+            // No classification rule reached it. Treated as vulnerable rather
+            // than safe: a false positive is a finding a human dismisses, a
+            // false negative is cryptography nobody was told about.
+            ?? /^(RSA|EC|DH|DSA)/i.test(primitiveOf(algorithm) ?? ''),
           requiresInvestigation: rule.requiresInvestigation || rule.strength === 'WEAK',
           dedupeKey: makeFindingDedupeKey({
             algorithm,
-            usage: rule.strength === 'STRONG' ? rule.impliesUsage : 'UNKNOWN',
+            usage,
             path: file.path,
             startLine: line,
             title: rule.ruleId,

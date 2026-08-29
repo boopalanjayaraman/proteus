@@ -6,6 +6,7 @@ import { FirebaseTokenVerifier, type TokenVerifier } from './api/middleware/auth
 import { changeStreamsAvailable, connect, disconnect, redactUri } from './core/db/client';
 import { ensureIndexes } from './core/db/indexes';
 import { Repositories } from './core/repositories';
+import { AssessmentService } from './core/services/assessment';
 import { GraphService } from './core/services/graph';
 import { ProjectService } from './core/services/projects';
 import { GcpSecretVault } from './integrations/secrets/vault';
@@ -15,6 +16,7 @@ import { GeminiClient } from './agent/model';
 import { RuleEngine } from './core/rules/engine';
 import { loadRegistry } from './core/discovery/providers';
 import { runDiscovery } from './worker/discoveryJob';
+import { runAssessment } from './worker/assessmentJob';
 
 /**
  * Engine assets ship with the repository, not the bundle.
@@ -72,11 +74,8 @@ async function main(): Promise<void> {
   }
 
   const gcp = gcpConfig();
-  const projects = new ProjectService(
-    repos,
-    new GcpSecretVault(gcp.GCP_PROJECT_ID),
-    new GcsBlobStore(gcp.GCS_BUCKET),
-  );
+  const blobs = new GcsBlobStore(gcp.GCS_BUCKET);
+  const projects = new ProjectService(repos, new GcpSecretVault(gcp.GCP_PROJECT_ID), blobs);
 
   const graph = new GraphService(repos);
 
@@ -90,14 +89,23 @@ async function main(): Promise<void> {
   log.info({ engineDir, rules: engine.counts }, 'rulesets loaded');
 
   const model = new GeminiClient(geminiConfig().GEMINI_MODEL, geminiConfig().GEMINI_API_KEY);
+  const assessments = new AssessmentService(repos);
+
+  const assess = async (projectId: string): Promise<void> => {
+    const project = await repos.projects.byId(projectId);
+    if (project) await runAssessment(project, { repos, engine, model, blobs, logger: log });
+  };
 
   const app = await buildServer({
-    repos, projects, graph, verifier, logger: log,
+    repos, projects, graph, assessments, blobs, verifier, logger: log,
+    regenerateAssessment: assess,
     // Deliberately not awaited: discovery outlives the request that starts it,
     // and the client watches it over SSE rather than waiting on a response.
     startDiscovery: (project) => {
-      void runDiscovery(project, { repos, projects, engine, model, logger: log })
-        .catch((e) => log.error({ err: e, projectId: project.projectId }, 'discovery job crashed'));
+      void runDiscovery(project, {
+        repos, projects, engine, model, logger: log,
+        onComplete: (p) => assess(p.projectId),
+      }).catch((e) => log.error({ err: e, projectId: project.projectId }, 'discovery job crashed'));
     },
   });
   await app.listen({ port: core.PORT, host: '0.0.0.0' });

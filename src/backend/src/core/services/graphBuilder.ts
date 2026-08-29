@@ -51,8 +51,20 @@ function relationshipForUsage(usage: string): RelationshipType {
   }
 }
 
-const componentName = (path: string): string =>
+/**
+ * The node name for a source file.
+ *
+ * Exported because `persistCandidates` has to derive the same id when it writes
+ * a finding's `nodeIds`. Two spellings of the same component would give the
+ * inspector a node id that resolves to nothing — silently, since a missing node
+ * looks exactly like a finding with no graph presence.
+ */
+export const componentName = (path: string): string =>
   path.split('/').pop()?.replace(/\.\w+$/, '') ?? path;
+
+/** The node type a path produces. Test code is a mock, not a component. */
+export const componentType = (path: string): 'SOURCE_COMPONENT' | 'TEST_MOCK' =>
+  path.includes('/test/') ? 'TEST_MOCK' : 'SOURCE_COMPONENT';
 
 export async function buildGraph(graph: GraphService, input: BuildInput): Promise<number> {
   const { projectId } = input;
@@ -80,7 +92,7 @@ export async function buildGraph(graph: GraphService, input: BuildInput): Promis
 
     // The component that holds the call.
     const component = await graph.upsertNode(projectId, {
-      type: c.path.includes('/test/') ? 'TEST_MOCK' : 'SOURCE_COMPONENT',
+      type: componentType(c.path),
       canonicalName: componentName(c.path),
       subtitle: c.path,
       note: `Cryptographic implementation found at ${c.path}:${c.line}.`,
@@ -138,7 +150,11 @@ export async function buildGraph(graph: GraphService, input: BuildInput): Promis
       impact: d.capability.capability === 'NOT_SUPPORTED' ? 'MIGRATION_LIKELY'
         : d.capability.capability === 'UNKNOWN' ? 'DEPENDENCY_REQUIRES_INVESTIGATION'
         : 'NO_PQC_CHANGE_REQUIRED',
-      attributes: { library: d.dependencyName, version: d.version },
+      attributes: {
+        library: d.dependencyName, version: d.version,
+        // Read back by the disposition facts: EXEC-DISP-011 and -012 turn on it.
+        capability: d.capability.capability,
+      },
     }, seq++);
 
     await note('NODE', lib, `${d.dependencyName} ${d.version}`);

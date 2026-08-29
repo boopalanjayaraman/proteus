@@ -7,15 +7,22 @@ import { requireAuth, type TokenVerifier } from './middleware/auth';
 import { registerEventRoutes } from './routes/events';
 import { registerHealthRoutes } from './routes/health';
 import { registerMeRoutes } from './routes/me';
+import { registerAssessmentRoutes } from './routes/assessment';
 import { registerGraphRoutes } from './routes/graph';
 import { registerProjectRoutes } from './routes/projects';
+import type { AssessmentService } from '../core/services/assessment';
 import type { GraphService } from '../core/services/graph';
+import type { BlobStore } from '../integrations/storage/blobs';
 import type { ProjectService } from '../core/services/projects';
 
 export interface ServerOptions {
   repos: Repositories;
   projects: ProjectService;
   graph: GraphService;
+  assessments: AssessmentService;
+  blobs: BlobStore;
+  /** Regenerates an assessment. Needs the model, so it is injected. */
+  regenerateAssessment?: (projectId: string) => Promise<void>;
   verifier: TokenVerifier;
   logger: Logger;
   /** Kicks off discovery after a project is created. Absent in tests that do not clone. */
@@ -51,6 +58,9 @@ export async function buildServer(opts: ServerOptions): Promise<FastifyInstance>
     registerMeRoutes(authed, opts.repos);
     registerProjectRoutes(authed, opts.repos, opts.projects, opts.startDiscovery);
     registerGraphRoutes(authed, opts.repos, opts.graph);
+    registerAssessmentRoutes(
+      authed, opts.repos, opts.assessments, opts.blobs, opts.regenerateAssessment,
+    );
     registerEventRoutes(authed, opts.repos);
   });
 

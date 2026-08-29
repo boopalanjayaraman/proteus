@@ -37,16 +37,29 @@ export const PRECEDENCE: Partial<Record<ExecutionFamily, string[]>> = {
    * AUTONOMOUS_MIGRATION (EXEC-DISP-009) is evaluated LAST: every rule that could
    * place the finding outside the autonomy boundary gets first refusal. Anything
    * that reaches the end is genuinely in scope.
+   *
+   * EXEC-DISP-010 sits immediately before it and is mutually exclusive with it —
+   * 009 requires a determined usage, 010 requires an undetermined one — so the
+   * order between them is belt and braces rather than load-bearing. It is stated
+   * anyway: relying on two `when` clauses staying disjoint is how an ambiguous
+   * usage would eventually be migrated autonomously.
    */
   DISPOSITION: [
     'EXEC-DISP-001', // not quantum-vulnerable
-    'EXEC-DISP-002', // signature usage — out of scope
     'EXEC-DISP-003', // firmware-fixed algorithm set
     'EXEC-DISP-004', // hardware capability not declared
     'EXEC-DISP-005', // vendor-supplied software
-    'EXEC-DISP-006', // protocol-managed / unconfirmed peer
+    // Before 002, which also matches CERTIFICATE_VALIDATION. 008 is the more
+    // specific rule — a node type AND a usage — and it is the only one that
+    // raises the PKI recommendation, so letting 002 claim certificates first
+    // would silently delete an item the ruleset says it produces.
     'EXEC-DISP-008', // certificate / PKI
+    'EXEC-DISP-002', // signature usage — out of scope
+    'EXEC-DISP-006', // protocol-managed / unconfirmed peer
     'EXEC-DISP-007', // test or mock code
+    'EXEC-DISP-012', // provider capability unestablished — investigate
+    'EXEC-DISP-011', // provider predates the target — autonomous upgrade
+    'EXEC-DISP-010', // undetermined usage — investigate, never migrate
     'EXEC-DISP-009', // autonomous migration — last
   ],
 };

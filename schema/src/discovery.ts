@@ -166,6 +166,13 @@ export const NodeAttributes = z.object({
   usage: CryptoUsage.optional(),
   library: z.string().optional(),
   version: z.string().optional(),
+  /**
+   * What the provider capability registry established about this version's
+   * support for the migration target. A disposition rule turns on it
+   * (EXEC-DISP-011 / -012), so it belongs on the node rather than being
+   * recomputed wherever it is needed.
+   */
+  capability: z.enum(['SUPPORTED', 'NOT_SUPPORTED', 'UNKNOWN']).optional(),
   protocol: z.string().optional(),
   vendor: z.string().optional(),
   model: z.string().optional(),

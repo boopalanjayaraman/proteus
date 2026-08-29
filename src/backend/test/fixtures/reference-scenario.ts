@@ -133,7 +133,15 @@ export const REFERENCE_FINDINGS: ScenarioCase[] = [
       nodeType: 'CERTIFICATE', usage: 'CERTIFICATE_VALIDATION',
       signatureAlgorithm: 'SHA256withRSA', keyLength: 2048, quantumVulnerable: true,
     },
-    expect: { disposition: 'NO_CHANGE_REQUIRED', dispositionRuleId: 'EXEC-DISP-002' },
+    // EXEC-DISP-008, not EXEC-DISP-002. Both match a CERTIFICATE_VALIDATION
+    // usage, but 008 also requires the node type, and it is the only rule that
+    // raises the PKI recommendation the ruleset says it produces. 002 winning
+    // here made 008 unreachable for the exact case it was written for.
+    expect: {
+      disposition: 'NEEDS_FURTHER_INVESTIGATION',
+      dispositionRuleId: 'EXEC-DISP-008',
+      recommendation: { disposition: 'FOLLOW_ON_WORKSTREAM' },
+    },
   },
 ];
 
