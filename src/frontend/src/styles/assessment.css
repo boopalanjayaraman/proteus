@@ -89,8 +89,8 @@
   border: 1px solid var(--line); border-radius: 8px; background: var(--sur);
   padding: 17px; display: flex; flex-direction: column; gap: 13px;
 }
-.panel-label { font: 500 9.5px var(--mono); letter-spacing: 0.16em; color: var(--fg3); }
-.panel-label.acc { color: var(--acc); }
+.panel-label { font: 500 9.5px var(--mono); letter-spacing: 0.14em; color: var(--fg3); }
+.panel-label.acc { color: var(--acc); letter-spacing: 0.16em; }
 .panel-label.warn { color: var(--warn); font-weight: 600; font-size: 11px; }
 .panel-sub { margin: 0; font: 300 11px/1.65 var(--sans); color: var(--fg2); text-wrap: pretty; }
 .panel-empty { font-size: 10px; color: var(--fg4); line-height: 1.6; }

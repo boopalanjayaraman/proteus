@@ -62,10 +62,12 @@ function Shell() {
     : CRUMBS[last] ?? 'PROTEUS';
 
   return (
+    // The rail is the chrome; the breadcrumb bar sits inside the main column
+    // rather than across the top, which is what UX v1.3 shows.
     <div className="shell">
-      <Header crumb={crumb} project={project} />
+      <Nav project={project} />
       <div className="body">
-        <Nav project={project} />
+        <Header crumb={crumb} project={project} />
         <main className="main">
           <Routes>
             <Route path="/projects" element={<Projects />} />

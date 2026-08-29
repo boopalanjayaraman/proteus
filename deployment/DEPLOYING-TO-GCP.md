@@ -63,6 +63,11 @@ through the attached service account.
 export PROJECT_ID=your-project-id
 export REGION=us-central1
 gcloud config set project "$PROJECT_ID"
+
+# Firebase Auth may live in a DIFFERENT project from everything else — that is
+# supported and common. The backend verifies tokens against this one and does
+# everything else in $PROJECT_ID. Leave it unset if they are the same project.
+export FIREBASE_PROJECT_ID=your-firebase-project-id
 ```
 
 ---
@@ -213,7 +218,7 @@ GCP_REGION=${REGION}##\
 GCS_BUCKET=proteus-${PROJECT_ID}##\
 ARTIFACT_REGISTRY_REPO=proteus-sandbox##\
 CLOUD_BUILD_SERVICE_ACCOUNT=${BUILD_SA}##\
-FIREBASE_PROJECT_ID=${PROJECT_ID}##\
+FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID:-$PROJECT_ID}##\
 GEMINI_MODEL=gemini-3.5-flash##\
 BUILD_EXECUTOR=CLOUD_BUILD##\
 SANDBOX_PLACEMENT=CLOUD_RUN##\
@@ -244,10 +249,12 @@ export API_URL=$(gcloud run services describe proteus-api \
   --region="$REGION" --format='value(status.url)')
 echo "$API_URL"
 
-curl -s "${API_URL}/health" && echo
+curl -s "${API_URL}/healthz" && echo
 ```
 
-`/health` is the one unauthenticated route — a readiness probe has no credentials.
+`/healthz` and `/readyz` are the two unauthenticated routes — a probe has no credentials.
+`/readyz` is the more useful one: it reports which config groups resolved and whether
+change streams are available, and answers 503 rather than 200 when they are not.
 
 ---
 
@@ -262,7 +269,7 @@ Firebase console → Project settings → Your apps → SDK setup and configurat
 
 ```bash
 export FB_API_KEY='AIza...'
-export FB_AUTH_DOMAIN="${PROJECT_ID}.firebaseapp.com"
+export FB_AUTH_DOMAIN="${FIREBASE_PROJECT_ID:-$PROJECT_ID}.firebaseapp.com"
 export FB_APP_ID='1:...:web:...'
 ```
 
@@ -278,7 +285,7 @@ gcloud builds submit \
   --config=deployment/cloudbuild/frontend.yaml \
   --substitutions="^##^_REGION=${REGION}##_TAG=${TAG}##_API_URL=${API_URL}##\
 _FB_API_KEY=${FB_API_KEY}##_FB_AUTH_DOMAIN=${FB_AUTH_DOMAIN}##\
-_FB_PROJECT_ID=${PROJECT_ID}##_FB_APP_ID=${FB_APP_ID}"
+_FB_PROJECT_ID=${FIREBASE_PROJECT_ID:-$PROJECT_ID}##_FB_APP_ID=${FB_APP_ID}"
 
 gcloud run deploy proteus-frontend \
   --image="${REGION}-docker.pkg.dev/${PROJECT_ID}/proteus/frontend:${TAG}" \
@@ -347,8 +354,9 @@ it — and removing an address revokes the role on that user's next request.
 ## 7. Verify
 
 ```bash
-# 1. The API is up and reachable.
-curl -s "${API_URL}/health"
+# 1. The API is up, and ready — /readyz 503s if change streams are unavailable.
+curl -s "${API_URL}/healthz"
+curl -s "${API_URL}/readyz"
 
 # 2. CORS actually allows the frontend. An empty result here is the failure in §6.1.
 curl -s -o /dev/null -D - -X OPTIONS "${API_URL}/projects" \
@@ -429,7 +437,7 @@ cat > .env.production <<EOF
 VITE_API_BASE_URL=${API_URL}
 VITE_FIREBASE_API_KEY=${FB_API_KEY}
 VITE_FIREBASE_AUTH_DOMAIN=${FB_AUTH_DOMAIN}
-VITE_FIREBASE_PROJECT_ID=${PROJECT_ID}
+VITE_FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID:-$PROJECT_ID}
 VITE_FIREBASE_APP_ID=${FB_APP_ID}
 EOF
 npm run build

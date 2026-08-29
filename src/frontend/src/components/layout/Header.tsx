@@ -1,20 +1,19 @@
 import type { Project } from '@proteus/schema';
 import { useEffect, useState } from 'react';
-import { useAuth } from '../../app/AuthContext';
-import { useTheme } from '../../app/ThemeContext';
-import { STAGE_COLOR, STAGE_LABEL, autonomyDisplay, elapsed, isLive, mix } from '../../lib/impact';
+import { elapsed, isLive } from '../../lib/impact';
 
 /**
- * The persistent header.
+ * The breadcrumb bar (UX v1.3).
  *
- * Everything here is derived from project state — the stage pill, the elapsed
- * timer, the autonomy figures. Nothing is stored as a label, so nothing can
- * drift from what it describes.
+ * Deliberately thin. Everything that used to live up here — brand, theme,
+ * account, the autonomy figure — moved into the left rail, leaving this with
+ * three things: where you are, how long the current phase has been running, and
+ * the count that has to stay at zero for the product's claim to hold.
+ *
+ * All three are derived from project state. Nothing is stored as a label, so
+ * nothing can drift from what it describes.
  */
 export function Header({ crumb, project }: { crumb: string; project?: Project | null }) {
-  const { profile, signOut } = useAuth();
-  const { theme, toggle } = useTheme();
-
   const live = project ? isLive(project.stage) : false;
   const [, tick] = useState(0);
 
@@ -25,65 +24,26 @@ export function Header({ crumb, project }: { crumb: string; project?: Project | 
     return () => clearInterval(id);
   }, [live]);
 
-  const autonomy = project?.summary.autonomy;
+  const actions = project?.summary.autonomy?.humanEngineeringActions;
 
   return (
     <header className="hdr">
-      <div className="hdr-left">
-        <span className="brand mono">PROTEUS</span>
-        <span className="label crumb">{crumb}</span>
-      </div>
+      <span className="mono hdr-crumb">{crumb}</span>
+      <span className="hdr-spacer" />
 
-      <div className="hdr-right">
-        {project && (
-          <span
-            className="pill mono"
-            style={{
-              color: STAGE_COLOR[project.stage],
-              background: mix(STAGE_COLOR[project.stage], 13),
-            }}
-          >
-            {STAGE_LABEL[project.stage]}
-          </span>
-        )}
+      {live && (
+        <span className="mono hdr-elapsed">
+          {/* Pulses only while something is actually running. */}
+          <span className="hdr-pulse" aria-hidden="true" />
+          ELAPSED {elapsed(project?.stageEnteredAt)}
+        </span>
+      )}
 
-        {live && (
-          <span className="stat">
-            <span className="label">Elapsed</span>
-            <b className="mono">{elapsed(project?.stageEnteredAt)}</b>
-          </span>
-        )}
-
-        {autonomy && (
-          <>
-            <span className="stat">
-              <span className="label">Autonomous completion</span>
-              <b className="mono" style={{ color: 'var(--ok)' }}>
-                {autonomyDisplay(autonomy.completionPct)}
-              </b>
-            </span>
-            <span className="stat">
-              <span className="label">Human engineering actions</span>
-              <b className="mono">{autonomy.humanEngineeringActions}</b>
-            </span>
-          </>
-        )}
-
-        <button className="ghost" onClick={toggle} title="Switch theme">
-          {theme === 'dark' ? 'LIGHT' : 'DARK'}
-        </button>
-
-        {profile && (
-          <div className="account">
-            <span className="avatar mono">{profile.initials}</span>
-            <div className="account-menu">
-              <div className="account-name">{profile.displayName}</div>
-              <div className="label">Google account</div>
-              <button className="ghost" onClick={() => void signOut()}>LOG OUT</button>
-            </div>
-          </div>
-        )}
-      </div>
+      {actions !== undefined && (
+        <span className="mono hdr-actions">
+          HUMAN ENGINEERING ACTIONS <b>{actions}</b>
+        </span>
+      )}
     </header>
   );
 }

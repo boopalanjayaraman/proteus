@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { useAuth } from '../app/AuthContext';
+import { describeAuthError, type AuthFailure } from '../lib/authErrors';
 import { useTheme } from '../app/ThemeContext';
 import { LOGIN_VIEWBOX, loginEdges, loginNodes } from '../lib/loginGraph';
 
@@ -19,6 +21,8 @@ import { LOGIN_VIEWBOX, loginEdges, loginNodes } from '../lib/loginGraph';
 export function Login() {
   const { signIn } = useAuth();
   const { theme, toggle } = useTheme();
+  const [failure, setFailure] = useState<AuthFailure | null>(null);
+  const [busy, setBusy] = useState(false);
 
   return (
     <div className="login">
@@ -43,10 +47,32 @@ export function Login() {
             <span className="login-nowrap">post-quantum migration.</span>
           </h1>
           <div className="login-cta">
-            <button className="login-google" onClick={() => void signIn()}>
+            <button
+              className="login-google"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                setFailure(null);
+                try {
+                  await signIn();
+                } catch (e) {
+                  setFailure(describeAuthError(e));
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
               <span className="login-g" aria-hidden="true">G</span>
-              Continue with Google
+              {busy ? 'Signing in…' : 'Continue with Google'}
             </button>
+
+            {failure && (
+              <div className="login-error" role="alert">
+                <div className="login-error-msg">{failure.message}</div>
+                {failure.fix && <div className="login-error-fix">{failure.fix}</div>}
+                <div className="mono login-error-code">{failure.code}</div>
+              </div>
+            )}
             <p className="login-sub">
               Give it the context. Watch it understand. Approve once. Watch it work.
               Review the evidence.

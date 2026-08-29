@@ -44,7 +44,7 @@ export function Projects() {
     <div className="projects">
       <div className="projects-head">
         <div>
-          <h2>Migration projects</h2>
+          <h1>Migration projects</h1>
           <p className="sub">
             {data.count} {data.count === 1 ? 'project' : 'projects'}
             {data.awaitingApproval > 0 && ` · ${data.awaitingApproval} awaiting approval`}
@@ -83,8 +83,6 @@ export function Projects() {
                   </span>
                 </div>
 
-                <p className="tile-activity">{p.summary.lastActivityText}</p>
-
                 {/* Eight segments, one per user-facing stage. Derived, not stored. */}
                 <div className="rail">
                   {Array.from({ length: 8 }, (_, i) => (
@@ -92,11 +90,15 @@ export function Projects() {
                   ))}
                 </div>
 
-                <div className="tile-foot label">
-                  <span>{ago(p.summary.lastActivityAt)} · {p.projectId}</span>
-                  <span style={{ color: p.actionRequired ? 'var(--bad)' : 'var(--fg3)' }}>
-                    {actionLabel(p.stage, p.actionRequired)}
-                  </span>
+                <div className="tile-bottom">
+                  <p className="tile-activity">{p.summary.lastActivityText}</p>
+                  <div className="tile-foot label">
+                    <span>{ago(p.summary.lastActivityAt)} · {p.projectId}</span>
+                    <span className="tile-foot-gap" />
+                    <span style={{ color: p.actionRequired ? 'var(--bad)' : 'var(--fg3)' }}>
+                      {actionLabel(p.stage, p.actionRequired)}
+                    </span>
+                  </div>
                 </div>
               </button>
             );

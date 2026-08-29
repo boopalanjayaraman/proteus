@@ -39,6 +39,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const value: AuthState = {
     firebaseUser, profile, api, loading,
+    // Deliberately not caught here. A sign-in that fails must reach the screen
+    // that offered it: swallowing the rejection is how a popup opens, closes and
+    // leaves the user staring at an unchanged page with the reason in a console
+    // they are not looking at.
     signIn: async () => { await signInWithGoogle(); },
     signOut: async () => { await signOutOfProteus(); },
     setProfile,

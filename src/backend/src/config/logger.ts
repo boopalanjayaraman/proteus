@@ -16,25 +16,69 @@ import pino, { type Logger } from 'pino';
  */
 
 const SENSITIVE_KEYS = [
-  'githubToken', 'token', 'apiKey', 'GEMINI_API_KEY', 'MONGODB_URI',
+  'githubtoken', 'token', 'apikey', 'gemini_api_key', 'mongodb_uri',
   'authorization', 'password', 'secret',
 ];
 
-function scrub(value: unknown): unknown {
+const isSensitive = (key: string) => SENSITIVE_KEYS.includes(key.toLowerCase());
+
+/**
+ * A plain object or an array — the only things worth walking.
+ *
+ * Anything else is left for pino's own serialisers, and that is the important
+ * half. `Object.entries` on an Error returns `{}`, because `message` and `stack`
+ * are not enumerable: walking one would silently throw away the whole reason
+ * something failed. And walking a Fastify request reaches `raw.socket.server`
+ * and never comes back.
+ */
+const isPlain = (v: unknown): v is Record<string, unknown> => {
+  if (typeof v !== 'object' || v === null) return false;
+  const proto = Object.getPrototypeOf(v) as unknown;
+  return proto === Object.prototype || proto === null;
+};
+
+/** Deep enough for anything this product logs, shallow enough to stay cheap. */
+const MAX_DEPTH = 8;
+
+/**
+ * Redacts credentials on the way to stdout.
+ *
+ * `ancestors` tracks the path currently being walked rather than everything
+ * seen, so a genuine cycle is caught while the same object appearing twice in
+ * two branches still renders both times.
+ */
+function scrub(value: unknown, ancestors: Set<object> = new Set(), depth = 0): unknown {
   if (typeof value === 'string') return value.replace(GITHUB_TOKEN_PATTERN, '[REDACTED]');
-  if (Array.isArray(value)) return value.map(scrub);
-  if (value && typeof value === 'object') {
+  if (!isPlain(value) && !Array.isArray(value)) return value;
+
+  if (ancestors.has(value)) return '[Circular]';
+  if (depth >= MAX_DEPTH) return '[Truncated]';
+
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) return value.map((v) => scrub(v, ancestors, depth + 1));
     return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([k, v]) =>
-        SENSITIVE_KEYS.includes(k) ? [k, '[REDACTED]'] : [k, scrub(v)],
+      Object.entries(value).map(([k, v]) =>
+        isSensitive(k) ? [k, '[REDACTED]'] : [k, scrub(v, ancestors, depth + 1)],
       ),
     );
+  } finally {
+    // Removed on the way out: a sibling reference is not a cycle.
+    ancestors.delete(value);
   }
-  return value;
 }
 
-export function createLogger(level: string, pretty: boolean): Logger {
-  return pino({
+export function createLogger(
+  level: string,
+  pretty: boolean,
+  /**
+   * Where the lines go. Injected so a test can read what was actually written
+   * rather than assert on what `scrub` returns — the redaction that matters is
+   * the redaction that survives pino's own serialisation.
+   */
+  destination?: pino.DestinationStream,
+): Logger {
+  const options: pino.LoggerOptions = {
     level,
     // Nested paths the pattern cannot see, removed by key.
     redact: {
@@ -49,13 +93,17 @@ export function createLogger(level: string, pretty: boolean): Logger {
     },
     hooks: {
       logMethod(args, method) {
-        method.apply(this, args.map(scrub) as Parameters<typeof method>);
+        method.apply(
+          this,
+          args.map((a) => scrub(a)) as Parameters<typeof method>,
+        );
       },
     },
-    ...(pretty
+    ...(pretty && !destination
       ? { transport: { target: 'pino-pretty', options: { translateTime: 'HH:MM:ss', ignore: 'pid,hostname' } } }
       : {}),
-  });
+  };
+  return destination ? pino(options, destination) : pino(options);
 }
 
 export type { Logger };
