@@ -66,6 +66,26 @@ export function canDelete(
   return { enabled: true };
 }
 
+/**
+ * Whether stopping is offered.
+ *
+ * Only while there is a run to stop. A project that never started one, or whose
+ * run already ended, has nothing to interrupt — offering it would suggest the
+ * product is doing something it is not.
+ */
+export function canStop(
+  p: Pick<Project, 'lifecycle' | 'stage' | 'summary'>,
+): ActionAvailability {
+  if (p.lifecycle === 'DELETED') return { enabled: false, reason: 'This project is deleted.' };
+  if (!p.summary.migrationApproved) {
+    return { enabled: false, reason: 'No migration has been started.' };
+  }
+  if (p.summary.migrationComplete) {
+    return { enabled: false, reason: 'The migration has already finished.' };
+  }
+  return { enabled: true };
+}
+
 /** The confirmation gate: the id, typed exactly. */
 export const confirmMatches = (typed: string, projectId: string): boolean =>
   typed.trim() === projectId;

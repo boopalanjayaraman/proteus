@@ -17,7 +17,7 @@ import {
 import { parseReports } from '../src/core/migration/testReports';
 import { ScriptedExecutor, excerpt } from '../src/integrations/cloudbuild/executor';
 import { GitWriter, migrationBranchName, safeJoin } from '../src/integrations/github/writer';
-import { runTestEngineering } from '../src/worker/migrationJob';
+import { publishBranch, runTestEngineering } from '../src/worker/migrationJob';
 import { InMemoryBlobStore } from '../src/integrations/storage/blobs';
 import { aProject, clearAll, startTestDb, type TestDb } from './helpers/mongo';
 import { failsafeReport, makeTestRepo, surefireReport, type TestRepo } from './helpers/repo';
@@ -719,5 +719,82 @@ describe('log excerpting is deterministic', () => {
     expect(lines).toContain('[ERROR] Tests run: 3, Failures: 1');
     expect(lines).toContain('[INFO] BUILD FAILURE');
     expect(lines).not.toContain('[INFO] Scanning for projects...');
+  });
+});
+
+describe('the branch reaches the repository', () => {
+  /** Only what `publishBranch` reaches for. */
+  const pushDeps = () => ({
+    repos: t.repos,
+    projects: { credentialFor: async () => 'github_pat_test' },
+    logger,
+  } as never);
+
+  /** The run row has to exist for the `pushed` flag to land on something. */
+  beforeEach(async () => {
+    const now = new Date();
+    await t.repos.migrationRuns.collection.insertOne({
+      _schemaVersion: 1, createdAt: now, updatedAt: now,
+      migrationRunId: 'mig_1', projectId: 'PQC-0001',
+      branch: { name: 'agent/pqc/PQC-0001', baseCommitSha: 'a'.repeat(40),
+                pushed: false, commitCount: 5 },
+    } as never);
+  });
+
+  /**
+   * PRD-11 deferred pushing until there was "a completed migration to push".
+   * There was — five commits, verification failed — and nothing pushed it, so
+   * `branch.pushed` stayed false and the work existed only in a temporary
+   * directory on the server. "Create a migration branch" is what the approval
+   * disclosed, and the create screen asks for `contents: read & write`, which
+   * only makes sense if the branch reaches the remote.
+   */
+  it('pushes even when verification failed — that is when the diff matters most', async () => {
+    const pushes: Array<{ url: string }> = [];
+    const git = {
+      push: async (url: string) => { pushes.push({ url }); },
+    } as unknown as GitWriter;
+
+    await publishBranch(
+      aProject({ projectId: 'PQC-0001' }) as never,
+      { migrationRunId: 'mig_1', branch: { name: 'agent/pqc/PQC-0001', commitCount: 5,
+        baseCommitSha: 'a'.repeat(40) } } as never,
+      git,
+      pushDeps(),
+    );
+
+    expect(pushes).toHaveLength(1);
+    const run = await t.repos.migrationRuns.findOne({ migrationRunId: 'mig_1' } as never);
+    expect(run?.branch.pushed).toBe(true);
+  });
+
+  it('does not push a branch with no commits', async () => {
+    const pushes: string[] = [];
+    const git = { push: async () => { pushes.push('x'); } } as unknown as GitWriter;
+
+    await publishBranch(
+      aProject({ projectId: 'PQC-0001' }) as never,
+      { migrationRunId: 'mig_1', branch: { name: 'b', commitCount: 0,
+        baseCommitSha: 'a'.repeat(40) } } as never,
+      git,
+      pushDeps(),
+    );
+    // Nothing happened, so there is nothing to publish.
+    expect(pushes).toHaveLength(0);
+  });
+
+  it('records a failed push rather than failing the run', async () => {
+    const git = {
+      push: async () => { throw new Error('remote: Permission denied'); },
+    } as unknown as GitWriter;
+
+    // The work is committed and the report is still worth writing.
+    await expect(publishBranch(
+      aProject({ projectId: 'PQC-0001' }) as never,
+      { migrationRunId: 'mig_1', branch: { name: 'b', commitCount: 3,
+        baseCommitSha: 'a'.repeat(40) } } as never,
+      git,
+      pushDeps(),
+    )).resolves.toBeUndefined();
   });
 });

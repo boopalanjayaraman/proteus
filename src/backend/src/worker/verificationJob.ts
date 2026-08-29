@@ -638,16 +638,25 @@ async function complete(
     },
   );
 
-  const openBlocking = await repos.humanGates.count({
-    projectId: project.projectId, status: 'OPEN', blocking: true,
-  } as never);
-
+  /**
+   * A run that has stopped needing a person says so, whatever kind of gate it is.
+   *
+   * `blocking` answers a different question — EXEC-ESC-001's, whether *other*
+   * approved work carries on while this one waits. It is not a statement about
+   * the run's terminal state, and reading it as one is how a migration ended
+   * `PAUSED_FOR_HUMAN` with `HUMAN_ACTION_REQUIRED` on the run and
+   * `actionRequired: false` on the project: paused, waiting, and nothing on any
+   * screen saying so. The only open gate was a non-blocking retry-budget one.
+   *
+   * The run's own outcome is the authority here. If it is not verified, a human
+   * is required — that is what the outcome literally says.
+   */
   await repos.projects.transition(
     project.projectId,
     'MIGRATING',
-    verified ? 'SANDBOX_READY' : openBlocking > 0 ? 'NEEDS_HUMAN_ACTION' : 'MIGRATING',
+    verified ? 'SANDBOX_READY' : 'NEEDS_HUMAN_ACTION',
     {
-      ...(verified ? {} : { actionRequired: openBlocking > 0 }),
+      ...(verified ? {} : { actionRequired: true }),
     } as never,
   ).catch(() => undefined);
 

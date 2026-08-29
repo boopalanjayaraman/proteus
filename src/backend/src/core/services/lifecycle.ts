@@ -33,6 +33,29 @@ export class LifecycleError extends Error {
 /** Stages where a worker may hold a lease and still be writing. */
 const BUSY_STAGES = ['ANALYZING', 'MIGRATING', 'VERIFYING'] as const;
 
+/**
+ * Whether anything is actually running.
+ *
+ * The stage alone is not the answer. A worker that died leaves the project in
+ * `MIGRATING` for ever, and refusing to archive or delete on that basis means
+ * a crashed run makes its project permanently undeletable — the guard protects
+ * a process that no longer exists.
+ *
+ * `currentHolder` already treats an expired lease as unheld, so this asks the
+ * question that matters: is someone holding this right now?
+ */
+async function liveHolder(repos: Repositories, projectId: string): Promise<string | null> {
+  const rows = await repos.migrationRuns.collection
+    .find({ projectId, status: { $in: ['RUNNING', 'PAUSED_FOR_HUMAN'] } } as never)
+    .toArray() as unknown as Array<{ migrationRunId: string }>;
+
+  for (const r of rows) {
+    const holder = await repos.migrationLease.currentHolder(r.migrationRunId);
+    if (holder) return holder;
+  }
+  return null;
+}
+
 export interface DeletionPreview {
   projectId: string;
   lifecycle: ProjectLifecycle;
@@ -61,7 +84,7 @@ export class LifecycleService {
   async archive(project: Project, userId: string, confirm: string): Promise<Project> {
     this.assertConfirmed(project, confirm);
     this.assertTransition(project, 'ARCHIVED');
-    this.assertNotBusy(project);
+    await this.assertNotBusy(project);
 
     await this.releaseSandbox(project, 'REQUESTED');
 
@@ -100,7 +123,7 @@ export class LifecycleService {
   async softDelete(project: Project, userId: string, confirm: string): Promise<void> {
     this.assertConfirmed(project, confirm);
     this.assertTransition(project, 'DELETED');
-    this.assertNotBusy(project);
+    await this.assertNotBusy(project);
 
     await this.repos.events.emit(project.projectId, {
       type: 'PROJECT_DELETED', phase: 'SYSTEM', level: 'MILESTONE', severity: 'WARN',
@@ -179,12 +202,80 @@ export class LifecycleService {
     }
   }
 
-  private assertNotBusy(project: Project): void {
-    if ((BUSY_STAGES as readonly string[]).includes(project.stage)) {
-      throw new LifecycleError('BUSY',
-        `${project.projectId} is ${project.stage.toLowerCase()}. Wait for it to finish, `
-        + 'or the run will keep writing to a project nobody can open.');
+  /**
+   * Refuses only while a worker is genuinely holding the run.
+   *
+   * Checked against the lease rather than the stage, because a stage outlives
+   * the process that set it: a crashed migration would otherwise leave its
+   * project undeletable for ever.
+   */
+  private async assertNotBusy(project: Project): Promise<void> {
+    if (!(BUSY_STAGES as readonly string[]).includes(project.stage)) return;
+
+    const holder = await liveHolder(this.repos, project.projectId);
+    if (!holder) return;
+
+    throw new LifecycleError('BUSY',
+      `${project.projectId} is ${project.stage.toLowerCase()} and ${holder} is still `
+      + 'working on it. Stop the migration first, or wait for it to finish — otherwise '
+      + 'the run keeps writing to a project nobody can open.');
+  }
+
+  /**
+   * Stops a migration, so its project can be archived or deleted.
+   *
+   * Marks the run ABANDONED and releases the lease. Nothing is rolled back: the
+   * branch, the commits and the evidence stay exactly as the run left them,
+   * because they are the record of what was attempted. This ends the run, it
+   * does not undo it.
+   */
+  async stopMigration(project: Project, userId: string): Promise<{ stopped: number }> {
+    const runs = await this.repos.migrationRuns.collection
+      .find({
+        projectId: project.projectId,
+        status: { $in: ['RUNNING', 'PAUSED_FOR_HUMAN'] },
+      } as never)
+      .toArray() as unknown as Array<{ migrationRunId: string }>;
+
+    const now = new Date();
+    for (const run of runs) {
+      await this.repos.migrationRuns.collection.updateOne(
+        { migrationRunId: run.migrationRunId } as never,
+        {
+          $set: {
+            status: 'ABANDONED', outcome: 'HUMAN_ACTION_REQUIRED',
+            completedAt: now, updatedAt: now,
+            // Cleared so nothing reads it as still held, and so a reaper does
+            // not pick the run up and start a second worker on it.
+            lease: { holder: 'stopped', expiresAt: now },
+          } as never,
+        },
+      );
     }
+
+    if (runs.length > 0) {
+      await this.repos.projects.collection.updateOne(
+        { projectId: project.projectId } as never,
+        {
+          $set: {
+            stage: 'NEEDS_HUMAN_ACTION', stageEnteredAt: now, updatedAt: now,
+            actionRequired: true,
+            'summary.lastActivityAt': now,
+            'summary.lastActivityText': 'Migration stopped',
+          } as never,
+          $inc: { version: 1 } as never,
+        },
+      );
+      await this.repos.events.emit(project.projectId, {
+        type: 'MIGRATION_STOPPED', phase: 'MIGRATION', level: 'MILESTONE', severity: 'WARN',
+        title: 'Migration stopped',
+        message: `Stopped by ${userId}. The branch and every change it made are kept — `
+          + 'this ends the run, it does not undo it.',
+        actor: 'USER', refs: {},
+      }).catch(() => undefined);
+    }
+
+    return { stopped: runs.length };
   }
 
   private async liveSandbox(project: Project): Promise<SandboxDeployment | null> {

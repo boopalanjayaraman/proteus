@@ -379,6 +379,23 @@ export async function runTestEngineering(
     // The evidence package. `EXEC-VER-013` puts it before the migration may be
     // reported complete — it is the deliverable, not a by-product — so it runs
     // whatever the verdict was, and the report says which verdict that is.
+    /**
+     * Publish the branch, whatever the verdict.
+     *
+     * "Create a migration branch" is what the approval disclosed, and the scopes
+     * the create screen asks for — `contents: read & write` — only make sense if
+     * the branch reaches the repository. A branch that exists solely in a
+     * temporary directory on a server is not one anybody can review.
+     *
+     * Pushed even when verification failed, because that is exactly when a human
+     * most needs to read the diff. The evidence package says which verdict it
+     * carries; the branch is not a claim of success.
+     *
+     * A failed push does not fail the run: the work is committed, the report is
+     * still worth writing, and the failure is recorded rather than swallowed.
+     */
+    await publishBranch(project, loop.run, git, deps);
+
     if (verification) {
       await runReport(project, loop.run, {
         repos, blobs, logger: deps.logger,
@@ -398,6 +415,45 @@ export async function runTestEngineering(
     };
   } finally {
     await checkout.dispose();
+  }
+}
+
+/** Pushes the migration branch and records that it reached the remote. */
+export async function publishBranch(
+  project: Project,
+  run: MigrationRun,
+  git: GitWriter,
+  deps: MigrationJobDeps,
+): Promise<void> {
+  const { repos, projects, logger } = deps;
+  if (run.branch.commitCount === 0) return;
+
+  try {
+    const token = await projects.credentialFor(project.projectId);
+    await git.push(project.repository.url, token);
+
+    await repos.migrationRuns.collection.updateOne(
+      { migrationRunId: run.migrationRunId } as never,
+      { $set: { 'branch.pushed': true, updatedAt: new Date() } as never },
+    );
+    await repos.events.emit(project.projectId, {
+      type: 'BRANCH_CREATED', phase: 'MIGRATION', level: 'MILESTONE', severity: 'SUCCESS',
+      title: `Branch ${run.branch.name} pushed`,
+      message: `${run.branch.commitCount} commit${run.branch.commitCount === 1 ? '' : 's'} `
+        + `on ${run.branch.name}, based on ${run.branch.baseCommitSha.slice(0, 7)}.`,
+      actor: 'AGENT', refs: {},
+    });
+  } catch (e) {
+    // The token is redacted inside `push`; this only carries the message.
+    const reason = e instanceof Error ? e.message : String(e);
+    logger.error({ err: e }, 'could not push the migration branch');
+    await repos.events.emit(project.projectId, {
+      type: 'BRANCH_CREATED', phase: 'MIGRATION', level: 'DETAIL', severity: 'WARN',
+      title: 'Migration branch could not be pushed',
+      message: `${reason} — the work is committed locally and the diff is in the `
+        + 'evidence package.',
+      actor: 'SYSTEM', refs: {},
+    }).catch(() => undefined);
   }
 }
 

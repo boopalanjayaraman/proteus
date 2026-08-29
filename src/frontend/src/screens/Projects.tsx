@@ -59,7 +59,8 @@ export function Projects() {
    * the page: anything that makes you name the project separately from the one
    * you are looking at is a way to act on the wrong one.
    */
-  const [pending, setPending] = useState<{ project: Tile; action: 'archive' | 'delete' } | null>(null);
+  const [pending, setPending] =
+    useState<{ project: Tile; action: 'stop' | 'archive' | 'delete' } | null>(null);
   const [typed, setTyped] = useState('');
   const [preview, setPreview] = useState<Preview | null>(null);
   const [working, setWorking] = useState(false);
@@ -73,7 +74,7 @@ export function Projects() {
 
   const isPlatformAdmin = profile?.role === 'PLATFORM_ADMIN';
 
-  const choose = async (project: Tile, action: 'archive' | 'delete') => {
+  const choose = async (project: Tile, action: 'stop' | 'archive' | 'delete') => {
     setPending({ project, action });
     setTyped('');
     setPreview(null);
@@ -90,7 +91,8 @@ export function Projects() {
     setWorking(true);
     setActionError(null);
     try {
-      if (pending.action === 'archive') await api.archiveProject(pending.project.projectId);
+      if (pending.action === 'stop') await api.stopMigration(pending.project.projectId);
+      else if (pending.action === 'archive') await api.archiveProject(pending.project.projectId);
       else await api.deleteProject(pending.project.projectId);
       setPending(null);
       load();
@@ -191,11 +193,18 @@ export function Projects() {
       <ConfirmDialog
         open={pending !== null}
         danger={pending?.action === 'delete'}
-        title={pending?.action === 'delete'
-          ? `Delete ${pending.project.projectId}?`
-          : `Archive ${pending?.project.projectId}?`}
-        confirmLabel={pending?.action === 'delete' ? 'Delete project' : 'Archive project'}
-        confirmDisabled={!pending || !confirmMatches(typed, pending.project.projectId)}
+        title={
+          pending?.action === 'delete' ? `Delete ${pending.project.projectId}?`
+            : pending?.action === 'stop' ? `Stop the migration of ${pending.project.projectId}?`
+              : `Archive ${pending?.project.projectId}?`}
+        confirmLabel={
+          pending?.action === 'delete' ? 'Delete project'
+            : pending?.action === 'stop' ? 'Stop migration'
+              : 'Archive project'}
+        confirmDisabled={
+          !pending
+          || (pending.action !== 'stop' && !confirmMatches(typed, pending.project.projectId))
+        }
         busy={working}
         onConfirm={() => void confirm()}
         onCancel={() => setPending(null)}
@@ -204,7 +213,11 @@ export function Projects() {
           <>
             <p className="dialog-lede">{pending.project.name}</p>
             <p className="dialog-what">
-              {pending.action === 'archive'
+              {pending.action === 'stop'
+                ? 'The run ends and the project becomes archivable and deletable. Nothing '
+                  + 'is rolled back — the branch, its commits and the evidence stay exactly '
+                  + 'as the run left them, because they are the record of what was attempted.'
+                : pending.action === 'archive'
                 ? 'The project becomes read-only. Reports, evidence and the diff stay '
                   + 'downloadable. The sandbox is released and its slot freed.'
                 : 'The project is removed from the platform. Its records are retained but '
@@ -218,18 +231,25 @@ export function Projects() {
               </ul>
             )}
 
-            {/* Said plainly. Softening an irreversible action is how someone
-                finds out afterwards that it was one. */}
-            <p className="dialog-warn">This cannot be undone from the application.</p>
+            {pending.action !== 'stop' && (
+              <>
+                {/* Said plainly. Softening an irreversible action is how someone
+                    finds out afterwards that it was one. */}
+                <p className="dialog-warn">This cannot be undone from the application.</p>
 
-            <label htmlFor="confirm-id">
-              Type <b className="mono">{pending.project.projectId}</b> to confirm
-            </label>
-            <input
-              id="confirm-id" value={typed} autoComplete="off" spellCheck={false}
-              autoFocus placeholder={pending.project.projectId}
-              onChange={(e) => setTyped(e.target.value)}
-            />
+                {/* Typed, not clicked — but only where the act is destructive.
+                    Making someone type an id to stop a stuck run is friction on
+                    the way out of a problem. */}
+                <label htmlFor="confirm-id">
+                  Type <b className="mono">{pending.project.projectId}</b> to confirm
+                </label>
+                <input
+                  id="confirm-id" value={typed} autoComplete="off" spellCheck={false}
+                  autoFocus placeholder={pending.project.projectId}
+                  onChange={(e) => setTyped(e.target.value)}
+                />
+              </>
+            )}
 
             {actionError && <div className="error">{actionError}</div>}
           </>

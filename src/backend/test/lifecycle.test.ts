@@ -155,11 +155,21 @@ describe('archive makes a project read-only (AC-3, AC-4)', () => {
     expect(s.deployer.tornDown.length).toBeGreaterThan(0);
   });
 
-  it('refuses while a migration is running (AC-7)', async () => {
+  it('refuses while a worker is genuinely holding the run (AC-7)', async () => {
     const p = await aFullProject({ stage: 'MIGRATING' });
+    // The lease is what makes this a live run. Without one the stage is just a
+    // value a dead process left behind.
+    const now = new Date();
+    await t.repos.migrationRuns.collection.insertOne({
+      _schemaVersion: 1, createdAt: now, updatedAt: now,
+      migrationRunId: `mig_${p.projectId}_v1`, projectId: p.projectId, status: 'RUNNING',
+      branch: { name: 'b', baseCommitSha: 'a'.repeat(40), pushed: false, commitCount: 1 },
+      lease: { holder: 'worker-live', expiresAt: new Date(Date.now() + 600_000) },
+    } as never);
+
     const res = await archive(p.projectId);
     expect(res.status).toBe(409);
-    expect(await res.text()).toContain('CONFLICT');
+    expect(await res.text()).toContain('worker-live');
   });
 
   it('requires the project id typed to confirm', async () => {
@@ -268,8 +278,15 @@ describe('delete is soft, and admin only (AC-8 … AC-13)', () => {
     expect((rows[0] as SandboxDeployment).status).toBe('TORN_DOWN');
   });
 
-  it('refuses while a migration is running', async () => {
+  it('refuses while a worker is genuinely holding the run', async () => {
     const p = await aFullProject({ stage: 'VERIFYING' });
+    const now = new Date();
+    await t.repos.migrationRuns.collection.insertOne({
+      _schemaVersion: 1, createdAt: now, updatedAt: now,
+      migrationRunId: `mig_${p.projectId}_v1`, projectId: p.projectId, status: 'RUNNING',
+      branch: { name: 'b', baseCommitSha: 'a'.repeat(40), pushed: false, commitCount: 1 },
+      lease: { holder: 'worker-live', expiresAt: new Date(Date.now() + 600_000) },
+    } as never);
     expect((await del(p.projectId, ADMIN)).status).toBe(409);
   });
 
@@ -434,5 +451,85 @@ describe('projects that predate the lifecycle field', () => {
     await anUnmigratedProject();
     const list = await (await call('/projects', OWNER)).json() as { projects: unknown[] };
     expect(list.projects).toHaveLength(1);
+  });
+});
+
+describe('stopping a migration, and the guard that blocked deletion', () => {
+  /**
+   * A crashed migration made its project permanently undeletable.
+   *
+   * `assertNotBusy` refused on the stage alone — but a stage outlives the
+   * process that set it. A worker that died left the project in MIGRATING for
+   * ever, so the guard protected a process that no longer existed and the only
+   * way out was a database write.
+   */
+  const aRunningProject = async (leaseExpiresAt: Date) => {
+    const p = await aFullProject({ stage: 'MIGRATING' });
+    const now = new Date();
+    await t.repos.migrationRuns.collection.insertOne({
+      _schemaVersion: 1, createdAt: now, updatedAt: now,
+      migrationRunId: `mig_${p.projectId}_v1`, projectId: p.projectId,
+      status: 'RUNNING',
+      branch: { name: 'b', baseCommitSha: 'a'.repeat(40), pushed: false, commitCount: 2 },
+      lease: { holder: 'worker-abc', expiresAt: leaseExpiresAt },
+    } as never);
+    return p;
+  };
+
+  it('lets a project whose worker died be deleted without stopping anything', async () => {
+    const p = await aRunningProject(new Date(Date.now() - 60_000));
+    const res = await call(`/projects/${p.projectId}`, ADMIN, {
+      method: 'DELETE', body: JSON.stringify({ confirm: p.projectId }),
+    });
+    expect(res.status).toBe(204);
+  });
+
+  it('still refuses while a worker genuinely holds the run', async () => {
+    const p = await aRunningProject(new Date(Date.now() + 600_000));
+    const res = await call(`/projects/${p.projectId}`, ADMIN, {
+      method: 'DELETE', body: JSON.stringify({ confirm: p.projectId }),
+    });
+    expect(res.status).toBe(409);
+    // The message names who is holding it, so "wait" is actionable.
+    expect(await res.text()).toContain('worker-abc');
+  });
+
+  it('stopping ends the run and unblocks deletion', async () => {
+    const p = await aRunningProject(new Date(Date.now() + 600_000));
+
+    const stop = await call(`/projects/${p.projectId}/migration/stop`, OWNER, { method: 'POST', body: '{}' });
+    expect(stop.status).toBe(200);
+    expect(await stop.json()).toMatchObject({ stopped: 1 });
+
+    const run = await t.repos.migrationRuns.findOne({
+      migrationRunId: `mig_${p.projectId}_v1`,
+    } as never);
+    expect(run?.status).toBe('ABANDONED');
+
+    // The project says a person is needed, rather than claiming to still work.
+    const after = await t.repos.projects.byId(p.projectId);
+    expect(after?.stage).toBe('NEEDS_HUMAN_ACTION');
+    expect(after?.actionRequired).toBe(true);
+
+    expect((await call(`/projects/${p.projectId}`, ADMIN, {
+      method: 'DELETE', body: JSON.stringify({ confirm: p.projectId }),
+    })).status).toBe(204);
+  });
+
+  it('keeps the branch and its commits — stopping ends a run, it does not undo one', async () => {
+    const p = await aRunningProject(new Date(Date.now() + 600_000));
+    await call(`/projects/${p.projectId}/migration/stop`, OWNER, { method: 'POST', body: '{}' });
+
+    const run = await t.repos.migrationRuns.findOne({
+      migrationRunId: `mig_${p.projectId}_v1`,
+    } as never);
+    expect(run?.branch.commitCount).toBe(2);
+    expect(run?.branch.name).toBe('b');
+  });
+
+  it('reports nothing to stop when there is no live run', async () => {
+    const p = await aFullProject({ stage: 'COMPLETED' });
+    const res = await call(`/projects/${p.projectId}/migration/stop`, OWNER, { method: 'POST', body: '{}' });
+    expect(await res.json()).toMatchObject({ stopped: 0 });
   });
 });

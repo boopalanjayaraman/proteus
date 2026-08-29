@@ -2,7 +2,7 @@ import type { Project } from '@proteus/schema';
 import { describe, expect, it } from 'vitest';
 import {
   READ_ONLY_NOTICE, canArchive, canDelete, confirmMatches, isArchived, isReadOnly,
-  previewSummary, screenAvailability, handoff, NO_HANDOFF,
+  previewSummary, screenAvailability, handoff, NO_HANDOFF, canStop,
 } from '../src/lib/lifecycle';
 
 /**
@@ -289,5 +289,27 @@ describe('handoff from discovery to the assessment', () => {
 
   it('treats an unloaded project as no evidence either way', () => {
     expect(replay([{ loaded: false, done: false }, { loaded: false, done: true }])).toEqual([]);
+  });
+});
+
+describe('canStop', () => {
+  const p = (over: Record<string, unknown>) => ({
+    lifecycle: 'ACTIVE', stage: 'MIGRATING',
+    summary: { migrationApproved: true, migrationComplete: false, ...over },
+  } as unknown as Parameters<typeof canStop>[0]);
+
+  it('is offered while a migration is under way', () => {
+    expect(canStop(p({})).enabled).toBe(true);
+  });
+
+  it('is not offered before one has started', () => {
+    // Offering it would suggest the product is doing something it is not.
+    const a = canStop(p({ migrationApproved: false }));
+    expect(a.enabled).toBe(false);
+    expect(a.reason).toContain('No migration');
+  });
+
+  it('is not offered once it has finished', () => {
+    expect(canStop(p({ migrationComplete: true })).enabled).toBe(false);
   });
 });

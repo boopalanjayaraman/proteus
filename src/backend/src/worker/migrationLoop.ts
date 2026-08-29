@@ -58,6 +58,25 @@ import type { BlobStore } from '../integrations/storage/blobs';
  * failure of the run and should say so rather than being reported as though the
  * agent had proposed something forbidden.
  */
+/**
+ * The stack, as discovery established it.
+ *
+ * Defaults only where the profile is absent — a project that was never analysed
+ * has no profile, and refusing to migrate over it would be worse than assuming
+ * the fixture's stack.
+ */
+export function stackOf(project: Project): {
+  language: string; languageVersion?: string; buildSystem: string; framework?: string;
+} {
+  const p = project.repository.profile;
+  return {
+    language: p?.language ?? 'Java',
+    buildSystem: p?.buildSystem ?? 'Maven',
+    ...(p?.languageVersion ? { languageVersion: p.languageVersion } : {}),
+    ...(p?.framework ? { framework: p.framework } : {}),
+  };
+}
+
 export class PatchRefused extends Error {
   constructor(message: string) {
     super(message);
@@ -494,8 +513,11 @@ async function applyPatch(
     files,
     acceptanceTests,
     invariants: baseline.invariants,
-    buildSystem: 'Maven',
-    language: 'Java',
+    // From what discovery established, not from constants. The stack was
+    // hardcoded here while the profile sat unread on the project — so the agent
+    // was told "Java" and never "Java 17", and proposed an API that arrived in
+    // Java 21.
+    ...stackOf(project),
     ...(targetOf(assessment, item) ? { target: targetOf(assessment, item)! } : {}),
   });
 
@@ -553,6 +575,7 @@ async function applyRepair(
     classificationRuleId: last.classification.ruleId,
     classificationRationale: last.classification.rationale,
     authorisedRuleIds: [last.classification.ruleId, 'EXEC-REP-001', 'EXEC-REP-002'],
+    ...stackOf(project),
     files,
     invariants: baseline.invariants,
     priorAttempts,

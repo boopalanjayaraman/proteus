@@ -269,6 +269,29 @@ export function registerProjectRoutes(
   });
 
   /**
+   * Stops a running migration.
+   *
+   * The way out of a run that will not finish. Nothing is rolled back — the
+   * branch and its commits are the record of what was attempted — and the
+   * project becomes archivable and deletable, which is usually the point.
+   */
+  app.post<{ Params: Params }>('/projects/:id/migration/stop', async (req) => {
+    const project = await loadOwnedProject(repos, req, req.params.id);
+    if (!lifecycle) throw ApiError.badRequest('Migration control is not configured.');
+
+    const { stopped } = await lifecycle.stopMigration(project, currentUser(req).uid);
+    if (stopped > 0) {
+      record(req, {
+        action: 'MIGRATION_RERUN',
+        summary: `Stopped the migration of ${project.name}`,
+        projectId: project.projectId,
+        detail: { runs: stopped, stage: project.stage },
+      });
+    }
+    return { stopped };
+  });
+
+  /**
    * Archive — the owner's action, and irreversible from here.
    *
    * The sandbox goes with it: an archived project offers no link to review one,

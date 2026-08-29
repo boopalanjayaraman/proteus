@@ -25,7 +25,8 @@ import { RuleEngine } from '../src/core/rules/engine';
 import { ScriptedExecutor } from '../src/integrations/cloudbuild/executor';
 import { InMemoryBlobStore } from '../src/integrations/storage/blobs';
 import { migrationBranchName } from '../src/integrations/github/writer';
-import { assertWithinScope, PatchRefused } from '../src/worker/migrationLoop';
+import { assertWithinScope, PatchRefused, stackOf,
+} from '../src/worker/migrationLoop';
 import { runTestEngineering } from '../src/worker/migrationJob';
 import { aProject, clearAll, startTestDb, type TestDb } from './helpers/mongo';
 import { failsafeReport, makeTestRepo, surefireReport, type TestRepo } from './helpers/repo';
@@ -832,4 +833,42 @@ describe('FR-1 · the loop is the orchestrator’s, not the model’s', () => {
       'baseline-invariants', 'coverage-assessment', 'generate-tests', 'migration-patch',
     ]);
   }, 60_000);
+});
+
+describe('the agent is told the runtime it is migrating for', () => {
+  /**
+   * A run spent its entire repair budget on `NoSuchAlgorithmException: ML-KEM-768
+   * KEM not available`.
+   *
+   * The repository is Java 17. `javax.crypto.KEM` arrived in Java 21. No
+   * provider registration can make `KEM.getInstance` resolve on 17 — so the
+   * three repairs that registered providers were all answering the wrong
+   * question. The agent was never told the version: the stack was hardcoded as
+   * `language: 'Java'` while the discovered profile sat unread on the project.
+   */
+  const withProfile = (profile: Record<string, unknown> | undefined) =>
+    stackOf({ repository: { profile } } as never);
+
+  it('carries the discovered version, not just the language', () => {
+    expect(withProfile({ language: 'Java', languageVersion: '17', buildSystem: 'Maven' }))
+      .toMatchObject({ language: 'Java', languageVersion: '17', buildSystem: 'Maven' });
+  });
+
+  it('carries the framework too, which changes what a patch may assume', () => {
+    expect(withProfile({
+      language: 'Java', languageVersion: '17', buildSystem: 'Maven',
+      framework: 'Spring Boot 3.2',
+    }).framework).toBe('Spring Boot 3.2');
+  });
+
+  it('falls back rather than refusing when a project was never analysed', () => {
+    // No profile is not a reason to refuse to migrate.
+    expect(withProfile(undefined)).toMatchObject({ language: 'Java', buildSystem: 'Maven' });
+    expect(withProfile(undefined).languageVersion).toBeUndefined();
+  });
+
+  it('does not invent a version it was not given', () => {
+    expect(withProfile({ language: 'Kotlin', buildSystem: 'Gradle' }))
+      .toEqual({ language: 'Kotlin', buildSystem: 'Gradle' });
+  });
 });

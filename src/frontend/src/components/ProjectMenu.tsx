@@ -1,6 +1,6 @@
 import type { Project } from '@proteus/schema';
 import { useEffect, useRef, useState } from 'react';
-import { canArchive, canDelete, type ActionAvailability } from '../lib/lifecycle';
+import { canArchive, canDelete, canStop, type ActionAvailability } from '../lib/lifecycle';
 
 /**
  * The per-project actions menu (PRD-17).
@@ -15,7 +15,7 @@ import { canArchive, canDelete, type ActionAvailability } from '../lib/lifecycle
  */
 
 export interface MenuAction {
-  id: 'archive' | 'delete';
+  id: 'stop' | 'archive' | 'delete';
   label: string;
   danger: boolean;
   availability: ActionAvailability;
@@ -24,7 +24,7 @@ export interface MenuAction {
 export function ProjectMenu({ project, isPlatformAdmin, onChoose }: {
   project: Project;
   isPlatformAdmin: boolean;
-  onChoose: (action: 'archive' | 'delete') => void;
+  onChoose: (action: 'stop' | 'archive' | 'delete') => void;
 }) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
@@ -46,6 +46,8 @@ export function ProjectMenu({ project, isPlatformAdmin, onChoose }: {
   }, [open]);
 
   const actions: MenuAction[] = [
+    // First, because it is the one that unblocks the other two.
+    { id: 'stop', label: 'Stop migration', danger: false, availability: canStop(project) },
     { id: 'archive', label: 'Archive', danger: false, availability: canArchive(project) },
     ...(isPlatformAdmin
       ? [{

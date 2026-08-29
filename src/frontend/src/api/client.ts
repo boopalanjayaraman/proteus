@@ -113,6 +113,12 @@ export class ApiClient {
       method: 'POST', body: '{}',
     });
 
+  /** Ends a run that will not finish. Nothing is rolled back. */
+  stopMigration = (projectId: string) =>
+    this.request<{ stopped: number }>(`/projects/${projectId}/migration/stop`, {
+      method: 'POST', body: '{}',
+    });
+
   /**
    * Archives a project. Irreversible, so the id is typed rather than clicked.
    */
