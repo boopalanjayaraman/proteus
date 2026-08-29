@@ -122,3 +122,27 @@
   font-size: 8.5px; padding: 2px 6px; border-radius: 2px;
   background: var(--rai); color: var(--fg3); border: 1px solid var(--line);
 }
+
+/* ── verification ──────────────────────────────────────────────────────── */
+.verdict { font-size: 10px; letter-spacing: 0.08em; font-weight: 500; }
+.check-row { display: flex; align-items: flex-start; gap: 9px; padding: 7px 0;
+  border-bottom: 1px solid var(--line); }
+.check-glyph { flex: none; width: 12px; font-size: 11px; line-height: 1.5; }
+.check-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.check-label { font: 400 11.5px/1.4 var(--sans); }
+.check-detail { font-size: 9.5px; line-height: 1.6; color: var(--fg3); text-wrap: pretty; }
+.check-noted {
+  flex: none; font-size: 8px; letter-spacing: 0.08em; padding: 2px 5px; border-radius: 2px;
+  background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn);
+}
+
+/* ── sandbox card ──────────────────────────────────────────────────────── */
+.sandbox-card.ready { border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.sandbox-url { font: 400 11.5px var(--mono); word-break: break-all; color: var(--acc); }
+.sandbox-label {
+  align-self: flex-start; font-size: 8.5px; letter-spacing: 0.1em; padding: 3px 7px;
+  border-radius: 2px; background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+}
+.sandbox-line { font-size: 9.5px; line-height: 1.6; color: var(--fg3); }
+.panel-label.ok { color: var(--ok); }

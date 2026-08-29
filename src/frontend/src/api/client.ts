@@ -1,7 +1,8 @@
 import type {
   ApproveMigrationInput, Artifact, Assessment, Baseline, Evidence, ExecutionRun, Finding,
   GraphEdge, GraphNode, GraphStyle, HumanGate, MigrationAttempt, MigrationChange,
-  MigrationRun, Project, ProjectEvent, Recommendation, User,
+  MigrationRun, Project, ProjectEvent, Recommendation, SandboxDeployment, User,
+  VerificationResult,
 } from '@proteus/schema';
 
 /**
@@ -199,6 +200,22 @@ export class ApiClient {
         meaningfulAttempts: number; budget: number; status: string;
       }>;
     }>(`/projects/${projectId}/migration/attempts`);
+
+  /**
+   * The verdict, with each check's provenance and the narrative assertions.
+   *
+   * `cryptoAssertions` comes back separate from `checks` because it carries a
+   * NOTED state the nine gating checks do not, and conflating them is how a
+   * screen ends up implying a noted residual is a failure.
+   */
+  verification = (projectId: string) =>
+    this.request<{ result: VerificationResult; executions: ExecutionRun[] }>(
+      `/projects/${projectId}/verification`,
+    );
+
+  /** 404 until one is deployed, which requires the other checks to pass. */
+  sandbox = (projectId: string) =>
+    this.request<{ sandbox: SandboxDeployment }>(`/projects/${projectId}/sandbox`);
 
   artifacts = (projectId: string) =>
     this.request<{ artifacts: Artifact[] }>(`/projects/${projectId}/artifacts`);

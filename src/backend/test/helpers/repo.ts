@@ -104,11 +104,25 @@ export async function makeTestRepo(): Promise<TestRepo> {
 }
 
 /**
+ * XML-escapes as Surefire does.
+ *
+ * Not cosmetic: a JUnit failure message routinely contains `<` and `>` —
+ * `expected: <256> but was: <1088>` is the canonical shape — and an unescaped
+ * fixture produces XML the parser reads differently from the real thing. The
+ * first version of this helper did not escape, and the round trip through
+ * `unescapeXml` was never exercised.
+ */
+const xmlEscape = (s: string): string =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+
+/**
  * Surefire's XML, as Maven writes it.
  *
  * Built rather than checked in so a test can state the outcome it needs in one
  * line, and so the parser is exercised against the real element shape —
- * self-closing passes, nested `<failure>` with a message attribute and a stack.
+ * self-closing passes, nested `<failure>` with an escaped message attribute and
+ * a stack.
  */
 export function surefireXml(
   suite: string,
@@ -117,8 +131,9 @@ export function surefireXml(
   const body = cases.map((c) => {
     if (c.failure) {
       return `  <testcase name="${c.name}" classname="${suite}" time="0.01">\n`
-        + `    <failure message="${c.failure}" type="java.lang.AssertionError">`
-        + `java.lang.AssertionError: ${c.failure}\n\tat ${suite}.${c.name}(${suite.split('.').pop()}.java:42)`
+        + `    <failure message="${xmlEscape(c.failure)}" type="java.lang.AssertionError">`
+        + `java.lang.AssertionError: ${xmlEscape(c.failure)}`
+        + `\n\tat ${suite}.${c.name}(${suite.split('.').pop()}.java:42)`
         + `</failure>\n  </testcase>`;
     }
     if (c.skipped) {

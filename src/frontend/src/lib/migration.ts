@@ -213,3 +213,146 @@ export function migrationStats(input: {
     { value: input.autonomousRepairs, label: 'AUTONOMOUS REPAIRS', fg: 'var(--acc)' },
   ];
 }
+
+// ---------------------------------------------------------------------------
+// Verification and the sandbox (PRD-13)
+// ---------------------------------------------------------------------------
+
+/** The order spec §35 lists them in, which is the order a reader expects. */
+export const CHECK_ORDER: string[] = [
+  'BASELINE_INVARIANTS_PRESERVED',
+  'BUILD_SUCCESSFUL',
+  'REQUIRED_TESTS_PASSED',
+  'PROHIBITED_CRYPTO_ABSENT',
+  'REQUIRED_PQC_PRESENT',
+  'MIGRATION_POLICY_SATISFIED',
+  'NO_CRITICAL_BLOCKER',
+  'SANDBOX_DEPLOYMENT_SUCCESSFUL',
+  'E2E_VERIFICATION_SUCCESSFUL',
+];
+
+export const CHECK_LABEL: Record<string, string> = {
+  BASELINE_INVARIANTS_PRESERVED: 'Baseline behavioural invariants preserved',
+  BUILD_SUCCESSFUL: 'Build successful',
+  REQUIRED_TESTS_PASSED: 'Required tests passed',
+  PROHIBITED_CRYPTO_ABSENT: 'Prohibited cryptography absent',
+  REQUIRED_PQC_PRESENT: 'Required PQC implementation present',
+  MIGRATION_POLICY_SATISFIED: 'Migration policy satisfied',
+  NO_CRITICAL_BLOCKER: 'No critical unresolved blocker',
+  SANDBOX_DEPLOYMENT_SUCCESSFUL: 'Sandbox deployment successful',
+  E2E_VERIFICATION_SUCCESSFUL: 'End-to-end verification successful',
+};
+
+export const STATUS_COLOR: Record<string, string> = {
+  PASS: 'var(--ok)',
+  FAIL: 'var(--bad)',
+  NOT_APPLICABLE: 'var(--fg4)',
+  // Narrative, not a gate. Deliberately not the failure colour — a noted
+  // residual is an honest observation, and colouring it red would tell a reader
+  // the migration went wrong when it went right.
+  NOTED: 'var(--warn)',
+};
+
+export const STATUS_GLYPH: Record<string, string> = {
+  PASS: '✓', FAIL: '✗', NOT_APPLICABLE: '–', NOTED: '!',
+};
+
+export interface CheckRow {
+  check: string;
+  label: string;
+  status: string;
+  detail: string;
+  colour: string;
+  glyph: string;
+  /** Present when the check cites an execution the reader can open. */
+  executionRunId?: string;
+  findings: Array<{ path: string; line?: number; match: string }>;
+}
+
+/** The nine checks, in spec order, whatever order they arrived in. */
+export function checkRows(
+  checks: Array<{
+    check: string; status: string; detail: string;
+    executionRunId?: string;
+    findings?: Array<{ path: string; line?: number; match: string }>;
+  }>,
+): CheckRow[] {
+  return [...checks]
+    .sort((a, b) => CHECK_ORDER.indexOf(a.check) - CHECK_ORDER.indexOf(b.check))
+    .map((c) => ({
+      check: c.check,
+      label: CHECK_LABEL[c.check] ?? c.check.replace(/_/g, ' '),
+      status: c.status,
+      detail: c.detail,
+      colour: STATUS_COLOR[c.status] ?? 'var(--fg3)',
+      glyph: STATUS_GLYPH[c.status] ?? '·',
+      ...(c.executionRunId ? { executionRunId: c.executionRunId } : {}),
+      findings: c.findings ?? [],
+    }));
+}
+
+/**
+ * The one-line verdict.
+ *
+ * Says how many passed out of how many required, because "NOT VERIFIED" alone
+ * tells a reader nothing about whether one thing or eight are wrong.
+ */
+export function verdictLine(
+  overall: string,
+  checks: Array<{ status: string }>,
+): string {
+  const passed = checks.filter((c) => c.status === 'PASS').length;
+  return overall === 'VERIFIED'
+    ? `VERIFIED · ${passed} of ${checks.length} checks passed`
+    : `NOT VERIFIED · ${passed} of ${checks.length} checks passed`;
+}
+
+export interface SandboxCard {
+  url?: string;
+  status: string;
+  /** Always shown. `isProduction` is a literal false on the document. */
+  label: string;
+  startup?: string;
+  e2e?: string;
+  ready: boolean;
+}
+
+/**
+ * The sandbox card.
+ *
+ * The not-production label is derived from `isProduction` rather than
+ * hardcoded, so a surface cannot forget it — spec §36 requires the environment
+ * never to be represented as production.
+ */
+export function sandboxCard(sandbox: {
+  service: { url?: string };
+  status: string;
+  isProduction: boolean;
+  startupCheck?: { passed: boolean; detail?: string; startupMs?: number };
+  e2e?: { passed: boolean; scenarios: Array<{ passed: boolean }>; latencyDeltaMs?: number };
+} | null): SandboxCard | null {
+  if (!sandbox) return null;
+  const passed = sandbox.e2e?.scenarios.filter((s) => s.passed).length ?? 0;
+  return {
+    ...(sandbox.service.url ? { url: sandbox.service.url } : {}),
+    status: sandbox.status,
+    label: sandbox.isProduction ? 'PRODUCTION' : 'SANDBOX · NOT PRODUCTION',
+    ...(sandbox.startupCheck
+      ? {
+          startup: sandbox.startupCheck.passed
+            ? `Started in ${((sandbox.startupCheck.startupMs ?? 0) / 1000).toFixed(1)}s`
+            : sandbox.startupCheck.detail ?? 'did not start',
+        }
+      : {}),
+    ...(sandbox.e2e
+      ? {
+          e2e: `${passed}/${sandbox.e2e.scenarios.length} scenarios passed`
+            + (sandbox.e2e.latencyDeltaMs !== undefined
+              ? ` · latency ${sandbox.e2e.latencyDeltaMs >= 0 ? '+' : ''}`
+                + `${sandbox.e2e.latencyDeltaMs}ms vs baseline`
+              : ''),
+        }
+      : {}),
+    ready: sandbox.status === 'READY',
+  };
+}

@@ -22,6 +22,8 @@ import type { ProjectService } from '../core/services/projects';
 import type { BuildExecutor } from '../integrations/cloudbuild/executor';
 import { GitHubReader } from '../integrations/github/client';
 import { GitWriter, migrationBranchName } from '../integrations/github/writer';
+import type { SandboxDeployer } from '../integrations/cloudrun/sandbox';
+import { runVerification, type VerificationJobOutcome } from './verificationJob';
 import { runMigrationLoop, type LoopOutcome } from './migrationLoop';
 import type { BlobStore } from '../integrations/storage/blobs';
 
@@ -50,8 +52,14 @@ export interface MigrationJobDeps {
   github?: GitHubReader;
   /** Set for tests: a working copy already on disk, so nothing is cloned. */
   workdir?: string;
-  /** Continues into verification. PRD-13 supplies it. */
-  onChangesApplied?: (run: MigrationRun) => void;
+  /** The port the migrated image listens on. */
+  containerPort?: number;
+  /** Injected so tests can point the sandbox probe at a stub server. */
+  fetchImpl?: typeof fetch;
+  /** Deploys the verified build. PRD-13 supplies it. */
+  deployer?: SandboxDeployer;
+  /** Produces the report and evidence package. PRD-14 supplies it. */
+  onVerified?: (run: MigrationRun) => void;
 }
 
 export interface TestEngineeringOutcome {
@@ -63,6 +71,8 @@ export interface TestEngineeringOutcome {
   vacuous: string[];
   /** Present once the build/test loop has run — PRD-12. */
   loop?: LoopOutcome;
+  /** Present once verification has run — PRD-13. */
+  verification?: VerificationJobOutcome;
 }
 
 export async function runTestEngineering(
@@ -342,8 +352,22 @@ export async function runTestEngineering(
       repos, engine: deps.engine, model, executor, blobs,
       logger: deps.logger,
       git, workdir: checkout.dir, commands,
-      ...(deps.onChangesApplied ? { onChangesApplied: deps.onChangesApplied } : {}),
     });
+
+    // Verification runs whether or not every item landed. A partially blocked
+    // run still has a verdict worth computing and reporting — reaching the end
+    // is not the same as passing, and the checks are what say which happened.
+    const verification = deps.deployer
+      ? await runVerification(project, loop.run, {
+          repos, engine: deps.engine, executor, blobs,
+          deployer: deps.deployer,
+          logger: deps.logger,
+          workdir: checkout.dir, commands,
+          ...(deps.containerPort !== undefined ? { containerPort: deps.containerPort } : {}),
+          ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+          ...(deps.onVerified ? { onVerified: deps.onVerified } : {}),
+        })
+      : undefined;
 
     return {
       run: loop.run,
@@ -353,6 +377,7 @@ export async function runTestEngineering(
       refused,
       vacuous,
       loop,
+      ...(verification ? { verification } : {}),
     };
   } finally {
     await checkout.dispose();

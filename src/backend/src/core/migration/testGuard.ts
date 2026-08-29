@@ -75,8 +75,13 @@ const PROHIBITED_MOCK_TARGETS = [
  * Matches a mocking framework being pointed at encapsulation, decapsulation,
  * the KEM itself, or the provider — not mere mentions of those words, which
  * appear legitimately in a test that exercises the real thing.
+ *
+ * Exported because `EXEC-VER-006`'s `mockedPrimitive: false` is the same
+ * question asked at the other end of the run: the guard refuses a stub before
+ * it is written, and verification confirms none reached the tree. Two copies of
+ * this would drift, and PRD-12 already paid for that lesson once.
  */
-const PRIMITIVE_STUB_PATTERNS: Array<{ re: RegExp; what: string }> = [
+export const PRIMITIVE_STUB_PATTERNS: Array<{ re: RegExp; what: string }> = [
   // Both Mockito shapes: `when(mock.encaps(..))` and `doReturn(x).when(mock).encaps(..)`.
   // The gap crosses `)` deliberately — the second form puts a closing paren
   // between the stubbing verb and the method, and matching only the first form

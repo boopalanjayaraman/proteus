@@ -13,6 +13,7 @@ import { ProjectService } from './core/services/projects';
 import { GcpSecretVault } from './integrations/secrets/vault';
 import { GcsBlobStore } from './integrations/storage/blobs';
 import { ProcessExecutor } from './integrations/cloudbuild/executor';
+import { LocalDockerDeployer } from './integrations/cloudrun/sandbox';
 import { GitHubReader } from './integrations/github/client';
 import { gcpConfig } from './config/env';
 import { GeminiClient } from './agent/model';
@@ -107,6 +108,10 @@ async function main(): Promise<void> {
   // image runs the build inside it, which is how a Java 17 Maven build succeeds
   // on a host that has neither.
   const executor = new ProcessExecutor(process.env.BUILD_IMAGE);
+  // Cloud Run is spec §36's target; the local Docker deployer builds the
+  // repository's own Dockerfile and starts the same image, so a startup failure
+  // caused by the migration surfaces the same way. Both satisfy one interface.
+  const deployer = new LocalDockerDeployer();
   const github = new GitHubReader();
 
   const app = await buildServer({
@@ -119,7 +124,7 @@ async function main(): Promise<void> {
         const run = await repos.migrationRuns.findOne({ migrationRunId } as never);
         if (!project || !run) return;
         await runTestEngineering(project, run, {
-          repos, projects, engine, model, executor, blobs, github, logger: log,
+          repos, projects, engine, model, executor, deployer, blobs, github, logger: log,
         });
       })().catch((e) => log.error({ err: e, projectId }, 'migration job crashed'));
     },

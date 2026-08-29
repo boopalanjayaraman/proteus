@@ -1,12 +1,16 @@
-import type { Baseline, EventLevel, MigrationChange, MigrationRun, Project } from '@proteus/schema';
+import type {
+  Baseline, EventLevel, MigrationChange, MigrationRun, Project, SandboxDeployment,
+  VerificationResult,
+} from '@proteus/schema';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { ActivityFeed } from '../../components/activity/ActivityFeed';
 import { useAuth } from '../../app/AuthContext';
 import { useProjectStream } from '../../hooks/useProjectStream';
 import {
-  CLASSIFICATION_COLOR, DISPOSITION_COLOR, branchMeta, checklist, migrationStats,
-  openProblems, rail, retryDisplay, shortSha, summarise, type ProblemSummary,
+  CLASSIFICATION_COLOR, DISPOSITION_COLOR, STATUS_COLOR, branchMeta, checkRows,
+  checklist, migrationStats, openProblems, rail, retryDisplay, sandboxCard, shortSha,
+  summarise, verdictLine, type ProblemSummary,
 } from '../../lib/migration';
 
 /**
@@ -27,6 +31,8 @@ export function Migration() {
   const [baseline, setBaseline] = useState<Baseline | null>(null);
   const [changes, setChanges] = useState<MigrationChange[]>([]);
   const [problems, setProblems] = useState<ProblemSummary[]>([]);
+  const [verification, setVerification] = useState<VerificationResult | null>(null);
+  const [sandbox, setSandbox] = useState<SandboxDeployment | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [level, setLevel] = useState<EventLevel | 'ALL'>('ALL');
 
@@ -49,6 +55,10 @@ export function Migration() {
     await api.baseline(id).then((b) => setBaseline(b.baseline)).catch(() => undefined);
     await api.changes(id).then((c) => setChanges(c.changes)).catch(() => undefined);
     await api.attempts(id).then((a) => setProblems(a.problems)).catch(() => undefined);
+    // Both are absent until the loop finishes, which is most of the run — an
+    // error here is a stage, not a failure.
+    await api.verification(id).then((v) => setVerification(v.result)).catch(() => undefined);
+    await api.sandbox(id).then((s) => setSandbox(s.sandbox)).catch(() => undefined);
   }, [api, id]);
 
   useEffect(() => { void load(); }, [load]);
@@ -85,6 +95,8 @@ export function Migration() {
     humanGatesOpened: run.metrics.humanGatesOpened,
   });
   const unresolved = openProblems(problems);
+  const rows = verification ? checkRows(verification.checks) : [];
+  const card = sandboxCard(sandbox);
 
   return (
     <div className="migration">
@@ -132,6 +144,76 @@ export function Migration() {
           </section>
 
           <aside className="mig-side">
+            {/* Spec §37 — the completion artifact. First once it exists, because
+                it is the thing the reader came for. */}
+            {card && (
+              <section className={`panel sandbox-card ${card.ready ? 'ready' : ''}`}>
+                <div className="mono panel-label ok">TESTED SANDBOX APPLICATION</div>
+                {card.url && card.ready ? (
+                  <a className="sandbox-url" href={card.url} target="_blank" rel="noreferrer">
+                    {card.url} ↗
+                  </a>
+                ) : (
+                  <div className="mono panel-empty">{card.status.replace(/_/g, ' ')}</div>
+                )}
+                {/* Derived from `isProduction`, never hardcoded — spec §36
+                    requires the environment never to be shown as production. */}
+                <div className="mono sandbox-label">{card.label}</div>
+                {card.startup && <div className="mono sandbox-line">{card.startup}</div>}
+                {card.e2e && <div className="mono sandbox-line">{card.e2e}</div>}
+              </section>
+            )}
+
+            {verification && (
+              <section className="panel">
+                <div className="mono panel-label acc">DETERMINISTIC VERIFICATION</div>
+                <div
+                  className="mono verdict"
+                  style={{
+                    color: verification.overall === 'VERIFIED' ? 'var(--ok)' : 'var(--bad)',
+                  }}
+                >
+                  {verdictLine(verification.overall, verification.checks)}
+                </div>
+                {rows.map((r) => (
+                  <div key={r.check} className="check-row">
+                    <span className="mono check-glyph" style={{ color: r.colour }}>
+                      {r.glyph}
+                    </span>
+                    <div className="check-body">
+                      <div className="check-label">{r.label}</div>
+                      <div className="mono check-detail">{r.detail}</div>
+                    </div>
+                  </div>
+                ))}
+
+                {verification.cryptoAssertions.length > 0 && (
+                  <>
+                    <div className="mono panel-label">CRYPTO VERIFICATION</div>
+                    {verification.cryptoAssertions.map((a) => (
+                      <div key={a.label} className="check-row">
+                        <span
+                          className="mono check-glyph"
+                          style={{ color: STATUS_COLOR[a.status] ?? 'var(--fg3)' }}
+                        >
+                          {a.status === 'PASS' ? '✓' : a.status === 'NOTED' ? '!' : '✗'}
+                        </span>
+                        <div className="check-body">
+                          <div className="check-label">{a.label}</div>
+                          <div className="mono check-detail">{a.evidence}</div>
+                        </div>
+                        {/* NOTED is narrative and never gating. Labelled so a
+                            reader does not mistake it for a failure. */}
+                        {a.status === 'NOTED' && (
+                          <span className="mono check-noted">NOTED</span>
+                        )}
+                      </div>
+                    ))}
+                  </>
+                )}
+              </section>
+            )}
+
             {/* The retry budget, per problem. Above the contract during a run,
                 because it is the thing that decides whether the agent keeps
                 going — and the one number a viewer watches. */}

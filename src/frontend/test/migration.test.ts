@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { MigrationStage, type Baseline, type BehavioralInvariant, type MigrationRun } from '@proteus/schema';
 import {
-  CLASSIFICATION_COLOR, MIGRATION_STAGES, STAGE_LABEL, branchMeta, checklist,
-  migrationStats, openProblems, rail, retryDisplay, shortSha, summarise,
-  type ProblemSummary,
+  CHECK_LABEL, CHECK_ORDER, CLASSIFICATION_COLOR, MIGRATION_STAGES, STAGE_LABEL,
+  STATUS_COLOR, branchMeta, checkRows, checklist, migrationStats, openProblems, rail,
+  retryDisplay, sandboxCard, shortSha, summarise, verdictLine, type ProblemSummary,
 } from '../src/lib/migration';
 
 /** PRD-11 — what the migration screen claims about progress and the contract. */
@@ -164,5 +164,75 @@ describe('AC-9, FR-14 · the retry counter is per problem', () => {
     ]) {
       expect(CLASSIFICATION_COLOR[c], c).toBeTruthy();
     }
+  });
+});
+
+describe('AC-9 · the verification list and the sandbox card', () => {
+  const check = (over: Partial<{ check: string; status: string; detail: string }> = {}) => ({
+    check: 'BUILD_SUCCESSFUL', status: 'PASS', detail: 'mvn -B verify exited 0', ...over,
+  });
+
+  it('renders the nine checks in the order spec §35 lists them', () => {
+    const rows = checkRows([
+      check({ check: 'E2E_VERIFICATION_SUCCESSFUL' }),
+      check({ check: 'BASELINE_INVARIANTS_PRESERVED' }),
+      check({ check: 'BUILD_SUCCESSFUL' }),
+    ]);
+    // Arrived in one order, read in another. A reader following the spec's list
+    // should find them where the spec puts them.
+    expect(rows.map((r) => r.check)).toEqual([
+      'BASELINE_INVARIANTS_PRESERVED', 'BUILD_SUCCESSFUL', 'E2E_VERIFICATION_SUCCESSFUL',
+    ]);
+    expect(rows[0]!.label).toBe('Baseline behavioural invariants preserved');
+    expect(CHECK_ORDER).toHaveLength(9);
+    for (const c of CHECK_ORDER) expect(CHECK_LABEL[c]).toBeTruthy();
+  });
+
+  it('never colours a NOTED assertion as a failure', () => {
+    // A noted residual is an honest observation about work that was never in
+    // scope. Colouring it red tells the reader the migration went wrong.
+    expect(STATUS_COLOR.NOTED).toBe('var(--warn)');
+    expect(STATUS_COLOR.FAIL).toBe('var(--bad)');
+    expect(STATUS_COLOR.NOTED).not.toBe(STATUS_COLOR.FAIL);
+    expect(STATUS_COLOR.PASS).toBe('var(--ok)');
+  });
+
+  it('says how many checks passed, not just the verdict', () => {
+    const checks = [check(), check({ status: 'FAIL' }), check({ status: 'PASS' })];
+    // "NOT VERIFIED" alone tells a reader nothing about whether one thing or
+    // eight are wrong.
+    expect(verdictLine('NOT_VERIFIED', checks)).toBe('NOT VERIFIED · 2 of 3 checks passed');
+    expect(verdictLine('VERIFIED', [check(), check()]))
+      .toBe('VERIFIED · 2 of 2 checks passed');
+  });
+
+  it('labels the sandbox from isProduction rather than a caption', () => {
+    const card = sandboxCard({
+      service: { url: 'https://sandbox.example.run.app' },
+      status: 'READY',
+      isProduction: false,
+      startupCheck: { passed: true, startupMs: 2400 },
+      e2e: {
+        passed: true,
+        scenarios: [{ passed: true }, { passed: true }, { passed: true }],
+        latencyDeltaMs: 4.1,
+      },
+    })!;
+    expect(card.label).toBe('SANDBOX · NOT PRODUCTION');
+    expect(card.ready).toBe(true);
+    expect(card.startup).toBe('Started in 2.4s');
+    expect(card.e2e).toBe('3/3 scenarios passed · latency +4.1ms vs baseline');
+  });
+
+  it('shows no URL until the sandbox is actually ready', () => {
+    const card = sandboxCard({
+      service: {}, status: 'BUILDING_IMAGE', isProduction: false,
+    })!;
+    expect(card.ready).toBe(false);
+    expect(card.url).toBeUndefined();
+    // The label is there whatever the state — spec §36 requires the environment
+    // never to be represented as production.
+    expect(card.label).toBe('SANDBOX · NOT PRODUCTION');
+    expect(sandboxCard(null)).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 import {
   APPROVE_OPTION_ID, ApproveMigrationInput, ResolveGateInput,
   type Baseline, type ExecutionRun, type MigrationAttempt, type MigrationChange,
-  type ProblemThread,
+  type ProblemThread, type SandboxDeployment, type VerificationResult,
 } from '@proteus/schema';
 import type { FastifyInstance } from 'fastify';
 import type { Repositories } from '../../core/repositories';
@@ -153,6 +153,50 @@ export function registerMigrationRoutes(
       .header('content-disposition',
         `attachment; filename="${project.projectId}-migration.diff"`)
       .send(parts.join('\n'));
+  });
+
+  /**
+   * The verdict, with every check's provenance.
+   *
+   * `cryptoAssertions` comes back alongside but separate, because it carries a
+   * `NOTED` state the nine gating checks do not — and conflating them on the
+   * wire is how a screen ends up implying a noted residual is a failure.
+   */
+  app.get<{ Params: Params }>('/projects/:id/verification', async (req) => {
+    await loadOwnedProject(repos, req, req.params.id);
+    const rows = await repos.verificationResults.collection
+      .find({ projectId: req.params.id } as never)
+      .sort({ verifiedAt: -1 })
+      .limit(1)
+      .toArray() as unknown as VerificationResult[];
+    const result = rows[0];
+    if (!result) throw ApiError.notFound('Verification result');
+
+    const cited = [...new Set(result.checks.map((c) => c.executionRunId).filter(Boolean))];
+    const executions = await repos.executionRuns.collection
+      .find({ executionRunId: { $in: cited } } as never)
+      .toArray() as unknown as ExecutionRun[];
+
+    return {
+      result,
+      // A check that cites an execution should be clickable through to it.
+      executions: executions.map(({ logExcerpt, ...rest }) => ({
+        ...rest, logExcerpt: logExcerpt.slice(0, 20),
+      })),
+    };
+  });
+
+  /** The sandbox. 404 until one is deployed, which requires a passing verdict. */
+  app.get<{ Params: Params }>('/projects/:id/sandbox', async (req) => {
+    await loadOwnedProject(repos, req, req.params.id);
+    const rows = await repos.sandboxDeployments.collection
+      .find({ projectId: req.params.id } as never)
+      .sort({ createdAt: -1 })
+      .limit(1)
+      .toArray() as unknown as SandboxDeployment[];
+    const sandbox = rows[0];
+    if (!sandbox) throw ApiError.notFound('Sandbox deployment');
+    return { sandbox };
   });
 
   app.post<{ Params: Params }>('/projects/:id/migration/approve', async (req, reply) => {

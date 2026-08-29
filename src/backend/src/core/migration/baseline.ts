@@ -87,9 +87,14 @@ export class BaselineService {
     const executionRunId = `exec_${run.migrationRunId}_${kind.toLowerCase()}_${Date.now().toString(36)}`;
     const startedAt = new Date();
 
-    const outcome = await this.executor.run({
-      ...spec, command, commitSha: run.branch.baseCommitSha,
-    });
+    // The commit the tree is ACTUALLY at, read now rather than taken from the
+    // caller's copy of the run. Every commit moves the head, and `EXEC-VER-002`
+    // pins the build check to it — an execution stamped with the base commit
+    // after three patches have landed claims to have tested a tree that no
+    // longer exists.
+    const commitSha = await this.headOf(run);
+
+    const outcome = await this.executor.run({ ...spec, command, commitSha });
 
     const inventory = parseReports(outcome.reports);
 
@@ -115,7 +120,7 @@ export class BaselineService {
       kind,
       environment: this.executor.environment,
       provider: outcome.provider,
-      commitSha: run.branch.baseCommitSha,
+      commitSha,
       command,
       exitCode: outcome.exitCode,
       status: outcome.status,
@@ -131,6 +136,16 @@ export class BaselineService {
 
     await this.repos.executionRuns.insert(execution);
     return { execution, inventory };
+  }
+
+  /** Where the branch is now, not where it was when the caller loaded the run. */
+  private async headOf(run: MigrationRun): Promise<string> {
+    const current = await this.repos.migrationRuns.findOne({
+      migrationRunId: run.migrationRunId,
+    } as never);
+    return current?.branch.headCommitSha
+      ?? run.branch.headCommitSha
+      ?? run.branch.baseCommitSha;
   }
 
   /**
