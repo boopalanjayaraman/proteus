@@ -1,7 +1,9 @@
+import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import pino from 'pino';
 import type { Assessment, MigrationRun, PlanItem } from '@proteus/schema';
 import { ScriptedModel } from '../src/agent/model';
+import { RuleEngine } from '../src/core/rules/engine';
 import {
   SOURCE_MUTATING_TOOL_NAMES, TEST_ENGINEERING_TOOL_NAMES, mutatesSource,
 } from '../src/agent/tools/registry';
@@ -24,9 +26,16 @@ import { failsafeReport, makeTestRepo, surefireReport, type TestRepo } from './h
 
 let t: TestDb;
 let repo: TestRepo;
+let engine: RuleEngine;
 const logger = pino({ level: 'silent' });
 
-beforeAll(async () => { t = await startTestDb(); }, 120_000);
+beforeAll(async () => {
+  t = await startTestDb();
+  engine = RuleEngine.fromFiles(
+    fileURLToPath(new URL('../../../engine/rulesets/pqc-migration-rules.yaml', import.meta.url)),
+    fileURLToPath(new URL('../../../engine/rulesets/migration-execution-rules.yaml', import.meta.url)),
+  );
+}, 120_000);
 afterAll(async () => { await t?.stop(); });
 beforeEach(async () => { await clearAll(t.repos); repo = await makeTestRepo(); });
 afterEach(async () => { await repo?.dispose(); });
@@ -168,6 +177,21 @@ const scriptedAgent = () => new ScriptedModel({
     components: [{
       component: 'CryptoService', path: 'src/main/java/pay/security/CryptoService.java',
       covered: false, reasoning: 'CryptoServiceTest never calls wrapSessionKey.',
+    }],
+  },
+  // The loop that follows is PRD-12's; this test asserts on what test
+  // engineering produced, so the patch only has to be well-formed.
+  'migration-patch': {
+    planItemId: 'plan_1',
+    changeType: 'SOURCE',
+    summary: 'Migrate CryptoService to ML-KEM-768',
+    rationale: 'CNSA 2.0 requires it',
+    findingIds: ['fnd_1'],
+    files: [{
+      path: 'src/main/java/pay/security/CryptoService.java',
+      operation: 'MODIFIED',
+      content: 'package pay.security;\n\npublic class CryptoService {\n'
+        + '  // ML-KEM-768 key establishment\n}\n',
     }],
   },
   'generate-tests': {
@@ -620,6 +644,7 @@ describe('the whole phase, end to end', () => {
     const outcome = await runTestEngineering(project, run, {
       repos: t.repos,
       projects: null as never, // Not reached: workdir is supplied, so nothing clones.
+      engine,
       model: scriptedAgent(),
       executor: scriptedExecutor(),
       blobs: new InMemoryBlobStore(),
@@ -643,13 +668,14 @@ describe('the whole phase, end to end', () => {
     expect(outcome.refused.map((r) => r.refusals[0]!.ruleId).sort())
       .toEqual(['EXEC-MOCK-001', 'EXEC-MOCK-004', 'EXEC-TEST-004']);
 
-    // The one accepted test is committed on the branch, with its record.
+    // The one accepted test is committed on the branch, with its record. The
+    // migration patch that follows is PRD-12's and is asserted there.
     const changes = await t.repos.migrationChanges.find({ projectId: project.projectId } as never);
-    expect(changes).toHaveLength(1);
-    expect(changes[0]!.changeType).toBe('TEST');
-    expect(changes[0]!.intent).toBe('TEST_ENGINEERING');
-    expect(changes[0]!.testIntegrity?.baselineRequirementChanged).toBe(false);
-    expect(changes[0]!.commitSha).toBeTruthy();
+    const engineered = changes.filter((c) => c.intent === 'TEST_ENGINEERING');
+    expect(engineered).toHaveLength(1);
+    expect(engineered[0]!.changeType).toBe('TEST');
+    expect(engineered[0]!.testIntegrity?.baselineRequirementChanged).toBe(false);
+    expect(engineered[0]!.commitSha).toBeTruthy();
 
     const baseline = await t.repos.baselines.findOne({ projectId: project.projectId } as never);
     expect(baseline!.commitSha).toBe(repo.baseCommitSha);
@@ -663,10 +689,10 @@ describe('the whole phase, end to end', () => {
     const stored = await t.repos.migrationRuns.findOne({
       migrationRunId: run.migrationRunId,
     } as never);
-    expect(stored!.stage).toBe('VALIDATING_BASELINE_TESTS');
-    expect(stored!.checkpoint.stage).toBe('VALIDATING_BASELINE_TESTS');
     expect(stored!.baselineId).toBe(`base_${run.migrationRunId}`);
-    expect(stored!.branch.commitCount).toBe(1);
+    // The test commit, plus the patch the loop went on to apply. Test
+    // engineering's own contribution is the first one.
+    expect(stored!.branch.commitCount).toBeGreaterThanOrEqual(1);
 
     // The feed tells the story a viewer needs, in order.
     const events = await t.repos.events.since(project.projectId, 0);

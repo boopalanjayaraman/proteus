@@ -254,3 +254,109 @@ export const CoverageAssessmentInput = z.object({
   reasoning: z.string().min(1),
 });
 export type CoverageAssessmentInput = z.infer<typeof CoverageAssessmentInput>;
+
+// ---------------------------------------------------------------------------
+// A3 patching and A4 diagnosis (PRD-12)
+// ---------------------------------------------------------------------------
+
+/**
+ * A4's table.
+ *
+ * Read-only on failure evidence, and it did not write the code it is judging.
+ * That second half is the structural argument: spec §26 forbids weakening a test
+ * to get a pass, and an agent that authored the failing patch is adjudicating
+ * its own work while motivated to conclude the test is wrong. A separate agent
+ * with no write tool has no such incentive — and the absence of the tool is what
+ * makes that true regardless of what its prompt says.
+ */
+export const DIAGNOSTIC_TOOL_NAMES = [
+  'get_failure_evidence', 'get_execution_log', 'get_baseline', 'get_change', 'read_file',
+  'record_diagnosis',
+] as const;
+
+/** A3 in its patching role. Adds source modification, which A3-as-tester lacks. */
+export const MIGRATION_TOOL_NAMES = [
+  'list_files', 'read_file', 'search_repository',
+  'apply_patch', 'revert_patch', 'commit', 'push', 'get_diff',
+  'generate_test', 'generate_mock', 'generate_fixture',
+  'run_cloud_build', 'run_tests',
+] as const;
+
+/**
+ * One patch against one plan item.
+ *
+ * Whole file contents rather than a diff: a model-authored unified diff has to
+ * apply against an exact context it cannot see, and a failed hunk is
+ * indistinguishable from a refused change. Writing the file and letting git
+ * compute the diff makes the patch either valid or a compile error, which the
+ * classifiers can then act on.
+ */
+export const PatchInput = z.object({
+  planItemId: z.string(),
+  files: z
+    .array(
+      z.object({
+        path: z.string().min(1),
+        content: z.string(),
+        operation: z.enum(['ADDED', 'MODIFIED']).default('MODIFIED'),
+      }),
+    )
+    .min(1),
+  summary: z.string().min(1), // "Migrated CryptoService to ML-KEM-768"
+  rationale: z.string().min(1),
+  changeType: ChangeType,
+  findingIds: z.array(z.string()).default([]),
+});
+export type PatchInput = z.infer<typeof PatchInput>;
+
+/**
+ * A repair, authorised before it was asked for.
+ *
+ * `classification` is supplied to the agent, not chosen by it — the rules
+ * classified the failure before A3 was invoked, and a field the patch author
+ * could set is a classification the patch author could pick to suit the repair
+ * it wanted to make.
+ */
+export const RepairInput = z.object({
+  files: z
+    .array(
+      z.object({
+        path: z.string().min(1),
+        content: z.string(),
+        operation: z.enum(['ADDED', 'MODIFIED']).default('MODIFIED'),
+      }),
+    )
+    .min(1),
+  summary: z.string().min(1),
+  rationale: z.string().min(1),
+  changeType: ChangeType,
+  /** Required for TEST/MOCK/FIXTURE — spec §26, classification before the edit. */
+  testIntegrity: z
+    .object({
+      failureClassification: FailureClassification,
+      reason: z.string().min(1),
+      baselineRequirementChanged: z.boolean(),
+      safeAutonomousModification: z.boolean(),
+    })
+    .optional(),
+});
+export type RepairInput = z.infer<typeof RepairInput>;
+
+/**
+ * A4's answer.
+ *
+ * `withinAutonomousBoundary` and `baselineRequirementChanged` are asked of the
+ * diagnostician rather than the author for the same reason the split exists at
+ * all. `confidence` is load-bearing: EXEC-DIAG-008 turns a low-confidence
+ * diagnosis into a gate rather than a guess.
+ */
+export const DiagnosisInput = z.object({
+  classification: FailureClassification,
+  rootCause: z.string().min(1),
+  reasoning: z.string().min(1),
+  withinAutonomousBoundary: z.boolean(),
+  baselineRequirementChanged: z.boolean(),
+  proposedAction: z.string().min(1),
+  confidence: z.number().min(0).max(1),
+});
+export type DiagnosisInput = z.infer<typeof DiagnosisInput>;

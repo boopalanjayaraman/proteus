@@ -5,7 +5,8 @@ import { ActivityFeed } from '../../components/activity/ActivityFeed';
 import { useAuth } from '../../app/AuthContext';
 import { useProjectStream } from '../../hooks/useProjectStream';
 import {
-  DISPOSITION_COLOR, branchMeta, checklist, rail, shortSha, summarise,
+  CLASSIFICATION_COLOR, DISPOSITION_COLOR, branchMeta, checklist, migrationStats,
+  openProblems, rail, retryDisplay, shortSha, summarise, type ProblemSummary,
 } from '../../lib/migration';
 
 /**
@@ -25,6 +26,7 @@ export function Migration() {
   const [run, setRun] = useState<MigrationRun | null>(null);
   const [baseline, setBaseline] = useState<Baseline | null>(null);
   const [changes, setChanges] = useState<MigrationChange[]>([]);
+  const [problems, setProblems] = useState<ProblemSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [level, setLevel] = useState<EventLevel | 'ALL'>('ALL');
 
@@ -46,6 +48,7 @@ export function Migration() {
     // early screen — an error here is a stage, not a failure.
     await api.baseline(id).then((b) => setBaseline(b.baseline)).catch(() => undefined);
     await api.changes(id).then((c) => setChanges(c.changes)).catch(() => undefined);
+    await api.attempts(id).then((a) => setProblems(a.problems)).catch(() => undefined);
   }, [api, id]);
 
   useEffect(() => { void load(); }, [load]);
@@ -74,12 +77,14 @@ export function Migration() {
   const contract = checklist(baseline);
   const summary = summarise(baseline);
 
-  const stats = [
-    { value: run.branch.commitCount, label: 'COMMITS', fg: 'var(--fg)' },
-    { value: baseline?.tests.total ?? '—', label: 'BASELINE TESTS', fg: 'var(--acc)' },
-    { value: contract.length, label: 'INVARIANTS', fg: 'var(--ok)' },
-    { value: changes.length, label: 'CHANGES', fg: 'var(--warn)' },
-  ];
+  const stats = migrationStats({
+    commitCount: run.branch.commitCount,
+    testsPassing: run.metrics.testsPassing,
+    testsFailing: run.metrics.testsFailing,
+    autonomousRepairs: run.metrics.autonomousRepairs,
+    humanGatesOpened: run.metrics.humanGatesOpened,
+  });
+  const unresolved = openProblems(problems);
 
   return (
     <div className="migration">
@@ -127,6 +132,45 @@ export function Migration() {
           </section>
 
           <aside className="mig-side">
+            {/* The retry budget, per problem. Above the contract during a run,
+                because it is the thing that decides whether the agent keeps
+                going — and the one number a viewer watches. */}
+            {unresolved.length > 0 && (
+              <section className="panel">
+                <div className="mono panel-label warn">RETRY POLICY</div>
+                {unresolved.map((p) => {
+                  const retry = retryDisplay(p);
+                  return (
+                    <div key={p.problemKey} className="problem">
+                      <div className="problem-top">
+                        <span
+                          className="mono problem-class"
+                          style={{ color: CLASSIFICATION_COLOR[p.classification] ?? 'var(--fg2)' }}
+                        >
+                          {p.classification.replace(/_/g, ' ')}
+                        </span>
+                        <span className="mono problem-count" style={{ color: retry.colour }}>
+                          {retry.label}
+                        </span>
+                      </div>
+                      <div className="problem-bar">
+                        <div
+                          className="problem-bar-fill"
+                          style={{ width: `${retry.fraction * 100}%`, background: retry.colour }}
+                        />
+                      </div>
+                      <div className="mono problem-signature">{p.signature}</div>
+                      {retry.exhausted && (
+                        <div className="mono problem-note">
+                          ESCALATED · UNRELATED APPROVED WORK CONTINUES
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </section>
+            )}
+
             <section className="panel">
               <div className="mono panel-label acc">BASELINE CONTRACT</div>
               {!summary && (

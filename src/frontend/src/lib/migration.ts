@@ -129,3 +129,87 @@ export const DISPOSITION_COLOR: Record<string, string> = {
   MUST_PRESERVE: 'var(--ok)',
   EXPECTED_TO_CHANGE: 'var(--acc)',
 };
+
+// ---------------------------------------------------------------------------
+// The loop (PRD-12)
+// ---------------------------------------------------------------------------
+
+export interface ProblemSummary {
+  problemKey: string;
+  classification: string;
+  signature: string;
+  meaningfulAttempts: number;
+  budget: number;
+  status: string;
+}
+
+export interface RetryDisplay {
+  label: string;
+  /** 0..1, for the bar. */
+  fraction: number;
+  exhausted: boolean;
+  colour: string;
+}
+
+/**
+ * The `n / 4` counter, per problem.
+ *
+ * Rendered per problem rather than per run because that is what the budget
+ * actually counts. A run-level total would say "3 / 4" after three unrelated
+ * one-attempt failures and imply the agent was one try from giving up.
+ */
+export function retryDisplay(problem: ProblemSummary): RetryDisplay {
+  const fraction = Math.min(1, problem.meaningfulAttempts / problem.budget);
+  const exhausted = problem.meaningfulAttempts >= problem.budget;
+  return {
+    label: `${problem.meaningfulAttempts} / ${problem.budget} MEANINGFUL ATTEMPTS`,
+    fraction,
+    exhausted,
+    colour: exhausted ? 'var(--bad)' : fraction >= 0.5 ? 'var(--warn)' : 'var(--acc)',
+  };
+}
+
+/** Problems worth showing: the unresolved ones, and anything that ran out. */
+export function openProblems(problems: ProblemSummary[]): ProblemSummary[] {
+  return problems.filter((p) => p.status !== 'RESOLVED');
+}
+
+export const CLASSIFICATION_COLOR: Record<string, string> = {
+  MOCK_INCOMPATIBILITY: 'var(--warn)',
+  TEST_FIXTURE_OUTDATED: 'var(--warn)',
+  EXPECTED_BEHAVIOR_CHANGE: 'var(--acc)',
+  IMPLEMENTATION_DEFECT: 'var(--bad)',
+  BUILD_DEFECT: 'var(--bad)',
+  DEPENDENCY_INCOMPATIBILITY: 'var(--vio)',
+  CONFIGURATION_DEFECT: 'var(--vio)',
+  TEST_COVERAGE_GAP: 'var(--fg3)',
+  ENVIRONMENT_FAILURE: 'var(--fg3)',
+  EXTERNAL_DEPENDENCY_BLOCKER: 'var(--vio)',
+  UNKNOWN: 'var(--bad)',
+};
+
+/**
+ * The live tiles above the feed.
+ *
+ * `humanEngineeringActions` is deliberately not derived from gates opened: a
+ * non-blocking gate is not an intervention, and counting it would undercut the
+ * claim the whole product rests on.
+ */
+export function migrationStats(input: {
+  commitCount: number;
+  testsPassing: number;
+  testsFailing: number;
+  autonomousRepairs: number;
+  humanGatesOpened: number;
+}): Array<{ value: number | string; label: string; fg: string }> {
+  return [
+    { value: input.commitCount, label: 'COMMITS', fg: 'var(--fg)' },
+    { value: input.testsPassing, label: 'TESTS PASSING', fg: 'var(--ok)' },
+    {
+      value: input.testsFailing,
+      label: 'FAILING',
+      fg: input.testsFailing > 0 ? 'var(--bad)' : 'var(--fg3)',
+    },
+    { value: input.autonomousRepairs, label: 'AUTONOMOUS REPAIRS', fg: 'var(--acc)' },
+  ];
+}

@@ -1,10 +1,13 @@
 import {
   APPROVE_OPTION_ID, ApproveMigrationInput, ResolveGateInput,
-  type Baseline, type ExecutionRun, type MigrationChange,
+  type Baseline, type ExecutionRun, type MigrationAttempt, type MigrationChange,
+  type ProblemThread,
 } from '@proteus/schema';
 import type { FastifyInstance } from 'fastify';
 import type { Repositories } from '../../core/repositories';
 import { ApprovalError, type ApprovalService } from '../../core/services/approval';
+import type { BlobStore } from '../../integrations/storage/blobs';
+import { MAX_MEANINGFUL_AUTONOMOUS_ATTEMPTS } from '../../core/migration/problems';
 import { StaleProjectError } from '../../core/repositories/projects';
 import { ApiError } from '../errors';
 import { currentUser } from '../middleware/auth';
@@ -27,6 +30,7 @@ export function registerMigrationRoutes(
   app: FastifyInstance,
   repos: Repositories,
   approvals: ApprovalService,
+  blobs: BlobStore,
   /** Starts the migration once approved. Injected — this layer must not import `agent/`. */
   startMigration?: (projectId: string, migrationRunId: string) => void,
 ): void {
@@ -84,6 +88,71 @@ export function registerMigrationRoutes(
       .sort({ sequence: -1 })
       .toArray() as unknown as MigrationChange[];
     return { count: changes.length, changes };
+  });
+
+  /**
+   * The attempt history — the audit trail of the loop.
+   *
+   * Each attempt carries its structured failure and its diagnosis, so "why did
+   * the agent edit that test?" is answerable from data rather than from a
+   * transcript. Ordered newest first, like the feed.
+   */
+  app.get<{ Params: Params }>('/projects/:id/migration/attempts', async (req) => {
+    await loadOwnedProject(repos, req, req.params.id);
+    const [attempts, threads] = await Promise.all([
+      repos.migrationAttempts.collection
+        .find({ projectId: req.params.id } as never)
+        .sort({ attemptNumber: -1 })
+        .toArray() as unknown as Promise<MigrationAttempt[]>,
+      repos.problemThreads.collection
+        .find({ projectId: req.params.id } as never)
+        .sort({ firstSeenAt: 1 })
+        .toArray() as unknown as Promise<ProblemThread[]>,
+    ]);
+    return {
+      count: attempts.length,
+      attempts,
+      // The `n / 4` counter, per problem. Only meaningful attempts are counted,
+      // so a run full of infrastructure flakes still shows zero.
+      problems: threads.map((t) => ({
+        problemKey: t.problemKey,
+        classification: t.classification,
+        signature: t.signature,
+        meaningfulAttempts: t.meaningfulAttempts,
+        budget: MAX_MEANINGFUL_AUTONOMOUS_ATTEMPTS,
+        status: t.status,
+      })),
+    };
+  });
+
+  /** The branch diff, as the report and the review both need it. */
+  app.get<{ Params: Params }>('/projects/:id/diff', async (req, reply) => {
+    const project = await loadOwnedProject(repos, req, req.params.id);
+    const changes = await repos.migrationChanges.collection
+      .find({ projectId: req.params.id } as never)
+      .sort({ sequence: 1 })
+      .toArray() as unknown as MigrationChange[];
+
+    const withDiffs = changes.filter((c) => c.diffGcsUri);
+    if (withDiffs.length === 0) throw ApiError.notFound('Diff');
+
+    const parts: string[] = [];
+    for (const change of withDiffs) {
+      const path = change.diffGcsUri!.replace(/^gs:\/\/[^/]+\//, '');
+      const body = await blobs.get(path).catch(() => null);
+      if (!body) continue;
+      parts.push(
+        `# Modification #${change.sequence} — ${change.summary}`,
+        `# ${change.intent} · ${change.changeType} · ${change.commitSha ?? ''}`,
+        body.toString('utf8'),
+      );
+    }
+
+    return reply
+      .header('content-type', 'text/x-diff; charset=utf-8')
+      .header('content-disposition',
+        `attachment; filename="${project.projectId}-migration.diff"`)
+      .send(parts.join('\n'));
   });
 
   app.post<{ Params: Params }>('/projects/:id/migration/approve', async (req, reply) => {

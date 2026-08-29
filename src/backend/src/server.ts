@@ -119,7 +119,7 @@ async function main(): Promise<void> {
         const run = await repos.migrationRuns.findOne({ migrationRunId } as never);
         if (!project || !run) return;
         await runTestEngineering(project, run, {
-          repos, projects, model, executor, blobs, github, logger: log,
+          repos, projects, engine, model, executor, blobs, github, logger: log,
         });
       })().catch((e) => log.error({ err: e, projectId }, 'migration job crashed'));
     },

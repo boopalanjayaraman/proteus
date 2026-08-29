@@ -79,7 +79,7 @@ debt:
     revisit: Only if event write latency is ever measured as a problem.
 
   - id: TD-004
-    title: prohibitedActions rescans all 110 rules on every call
+    title: prohibitedActions rescans every rule on every call
     severity: LOW
     raised: 2026-08-29
     incurred_in: PRD-01

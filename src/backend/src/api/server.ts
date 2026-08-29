@@ -66,7 +66,9 @@ export async function buildServer(opts: ServerOptions): Promise<FastifyInstance>
     registerAssessmentRoutes(
       authed, opts.repos, opts.assessments, opts.blobs, opts.regenerateAssessment,
     );
-    registerMigrationRoutes(authed, opts.repos, opts.approvals, opts.startMigration);
+    registerMigrationRoutes(
+      authed, opts.repos, opts.approvals, opts.blobs, opts.startMigration,
+    );
     registerEventRoutes(authed, opts.repos);
   });
 

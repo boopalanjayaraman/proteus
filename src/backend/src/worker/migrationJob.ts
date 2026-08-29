@@ -16,11 +16,13 @@ import {
   guardTestArtifact, validateAgainstBase,
   type GuardRefusal, type ProposedTestArtifact,
 } from '../core/migration/testGuard';
+import type { RuleEngine } from '../core/rules/engine';
 import type { Repositories } from '../core/repositories';
 import type { ProjectService } from '../core/services/projects';
 import type { BuildExecutor } from '../integrations/cloudbuild/executor';
 import { GitHubReader } from '../integrations/github/client';
 import { GitWriter, migrationBranchName } from '../integrations/github/writer';
+import { runMigrationLoop, type LoopOutcome } from './migrationLoop';
 import type { BlobStore } from '../integrations/storage/blobs';
 
 /**
@@ -40,6 +42,7 @@ import type { BlobStore } from '../integrations/storage/blobs';
 export interface MigrationJobDeps {
   repos: Repositories;
   projects: ProjectService;
+  engine: RuleEngine;
   model: ModelClient;
   executor: BuildExecutor;
   blobs: BlobStore;
@@ -47,8 +50,8 @@ export interface MigrationJobDeps {
   github?: GitHubReader;
   /** Set for tests: a working copy already on disk, so nothing is cloned. */
   workdir?: string;
-  /** Continues into the build/test loop. PRD-12 supplies it. */
-  onTestsReady?: (run: MigrationRun) => void;
+  /** Continues into verification. PRD-13 supplies it. */
+  onChangesApplied?: (run: MigrationRun) => void;
 }
 
 export interface TestEngineeringOutcome {
@@ -58,6 +61,8 @@ export interface TestEngineeringOutcome {
   written: string[];
   refused: Array<{ path: string; refusals: GuardRefusal[] }>;
   vacuous: string[];
+  /** Present once the build/test loop has run — PRD-12. */
+  loop?: LoopOutcome;
 }
 
 export async function runTestEngineering(
@@ -325,25 +330,29 @@ export async function runTestEngineering(
     }
 
     await closeAttempt(repos, attempt, 'SUCCEEDED');
-    await repos.migrationRuns.collection.updateOne(
-      { migrationRunId: current.migrationRunId } as never,
-      { $set: { 'metrics.cloudBuildAttempts': 3, updatedAt: new Date() } as never },
-    );
 
     log.info(
       { written: written.length, refused: refused.length, vacuous: vacuous.length },
       'test engineering complete',
     );
 
-    deps.onTestsReady?.(current);
+    // The tests exist and fail. Now make them pass — the loop is the orchestrator's,
+    // not the model's, so it can be checkpointed, resumed and bounded.
+    const loop = await runMigrationLoop(project, current, assessment, captured, {
+      repos, engine: deps.engine, model, executor, blobs,
+      logger: deps.logger,
+      git, workdir: checkout.dir, commands,
+      ...(deps.onChangesApplied ? { onChangesApplied: deps.onChangesApplied } : {}),
+    });
 
     return {
-      run: current,
+      run: loop.run,
       baselineId: captured.baselineId,
       invariants,
       written,
       refused,
       vacuous,
+      loop,
     };
   } finally {
     await checkout.dispose();

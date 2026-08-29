@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { MigrationStage, type Baseline, type BehavioralInvariant, type MigrationRun } from '@proteus/schema';
 import {
-  MIGRATION_STAGES, STAGE_LABEL, branchMeta, checklist, rail, shortSha, summarise,
+  CLASSIFICATION_COLOR, MIGRATION_STAGES, STAGE_LABEL, branchMeta, checklist,
+  migrationStats, openProblems, rail, retryDisplay, shortSha, summarise,
+  type ProblemSummary,
 } from '../src/lib/migration';
 
 /** PRD-11 — what the migration screen claims about progress and the contract. */
@@ -108,5 +110,59 @@ describe('AC-3, AC-8 · the baseline contract as the reader sees it', () => {
   it('is empty, not invented, before a baseline exists', () => {
     expect(checklist(null)).toEqual([]);
     expect(summarise(null)).toBeNull();
+  });
+});
+
+describe('AC-9, FR-14 · the retry counter is per problem', () => {
+  const problem = (over: Partial<ProblemSummary> = {}): ProblemSummary => ({
+    problemKey: 'MOCK_INCOMPATIBILITY|pay.A#b|unsupported key exchange',
+    classification: 'MOCK_INCOMPATIBILITY',
+    signature: 'Unsupported key exchange ML_KEM_PUBLIC_KEY',
+    meaningfulAttempts: 1, budget: 4, status: 'ACTIVE',
+    ...over,
+  });
+
+  it('renders n / 4 and escalates at the budget', () => {
+    expect(retryDisplay(problem()).label).toBe('1 / 4 MEANINGFUL ATTEMPTS');
+    expect(retryDisplay(problem()).exhausted).toBe(false);
+    expect(retryDisplay(problem({ meaningfulAttempts: 4 })).exhausted).toBe(true);
+    expect(retryDisplay(problem({ meaningfulAttempts: 4 })).colour).toBe('var(--bad)');
+    // The bar never overflows, even if a count somehow exceeds the budget.
+    expect(retryDisplay(problem({ meaningfulAttempts: 9 })).fraction).toBe(1);
+  });
+
+  it('hides a problem the repair resolved', () => {
+    const all = [problem(), problem({ problemKey: 'other', status: 'RESOLVED' })];
+    // A resolved problem still occupying the panel would suggest the agent is
+    // stuck on something it already fixed.
+    expect(openProblems(all).map((p) => p.problemKey)).toEqual([problem().problemKey]);
+    expect(openProblems(all.map((p) => ({ ...p, status: 'RESOLVED' })))).toEqual([]);
+  });
+
+  it('shows a repair count rather than a gate count in the tiles', () => {
+    const tiles = migrationStats({
+      commitCount: 6, testsPassing: 36, testsFailing: 0,
+      autonomousRepairs: 1, humanGatesOpened: 0,
+    });
+    expect(tiles.map((t) => t.label)).toEqual([
+      'COMMITS', 'TESTS PASSING', 'FAILING', 'AUTONOMOUS REPAIRS',
+    ]);
+    // Zero failing is not an alarm colour; one is.
+    expect(tiles[2]!.fg).toBe('var(--fg3)');
+    expect(migrationStats({
+      commitCount: 1, testsPassing: 35, testsFailing: 1,
+      autonomousRepairs: 0, humanGatesOpened: 0,
+    })[2]!.fg).toBe('var(--bad)');
+  });
+
+  it('gives every failure classification a colour', () => {
+    for (const c of [
+      'MOCK_INCOMPATIBILITY', 'TEST_FIXTURE_OUTDATED', 'EXPECTED_BEHAVIOR_CHANGE',
+      'IMPLEMENTATION_DEFECT', 'BUILD_DEFECT', 'DEPENDENCY_INCOMPATIBILITY',
+      'CONFIGURATION_DEFECT', 'TEST_COVERAGE_GAP', 'ENVIRONMENT_FAILURE',
+      'EXTERNAL_DEPENDENCY_BLOCKER', 'UNKNOWN',
+    ]) {
+      expect(CLASSIFICATION_COLOR[c], c).toBeTruthy();
+    }
   });
 });

@@ -31,8 +31,12 @@ test is rigged, which is the one thing an audience should not read.
 ### 1. The rules came first; the fixture validates them
 
 All 110 rules were extracted from NIST documents and the product spec **before this
-repository existed**. `EXEC-DET-001` says "RSA cipher in wrap or unwrap mode is key
-transport" because that is a fact about the Java crypto API, not because of a file here.
+repository existed**. Four have been added since (`EXEC-DISP-010`, `-011`, `-012`,
+`EXEC-DIAG-013`), each derived from the spec or a standard rather than from anything
+here — which is the same ordering, held to.
+
+`EXEC-DET-001` says "RSA cipher in wrap or unwrap mode is key transport" because that is
+a fact about the Java crypto API, not because of a file here.
 
 If the fixture had come first and the patterns had been written to match it, the tests
 would prove only that a regex still matches the file it was derived from. Keep that

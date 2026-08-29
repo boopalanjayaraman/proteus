@@ -14,7 +14,7 @@ than dressed up with a screen they do not really deliver.
 
 | # | PRD | Delivers | Visible on |
 |---|---|---|---|
-| 01 | Rules Engine | 110 rules evaluate deterministically; no model in the loop | — foundation |
+| 01 | Rules Engine | The ruleset evaluates deterministically; no model in the loop | — foundation |
 | 02 | Persistence & Event Log | Product state survives restart; ordered, resumable events | — foundation |
 | 03 | API Foundation, Auth & SSE | Authenticated REST, live stream that resumes by `seq` | — foundation |
 | 04 | Frontend Shell & Design System | Sign-in, routing, theme, the persistent header | Login |

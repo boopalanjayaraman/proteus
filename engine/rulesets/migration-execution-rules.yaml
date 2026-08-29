@@ -645,6 +645,35 @@ rules:
       would exhaust it before any real engineering was tried. Raises a recommendation with an
       owner rather than a gate, so unrelated approved work continues.
 
+  - ruleId: EXEC-DIAG-013
+    family: FAILURE_CLASSIFICATION
+    title: A failing assertion encoding an expected-to-change invariant is an authorised update
+    provenance: SPEC_DERIVED
+    specSection: "§24, §26"
+    gating: true
+    stage: ANALYZING_FAILURE
+    when:
+      failingAssertionIsExpectedToChangeInvariant: true
+    then:
+      classification: EXPECTED_BEHAVIOR_CHANGE
+      permitAutonomousRepair: true
+      requiresTestIntegrityRecord: true
+      baselineRequirementChanged: false
+    prohibitedActions: [MODIFY_SOURCE]
+    rationale: >-
+      The other half of EXEC-DIAG-005, and the reason decision D-003 replaced
+      `mustHold: true` with a disposition. EXEC-DIAG-005 covers a failing MUST_PRESERVE
+      invariant, which is a regression and a gate. This covers a failing EXPECTED_TO_CHANGE
+      one, which is the migration working: RSA-2048 wraps a session key to 256 bytes and
+      ML-KEM-768 produces 1088, so `assertEquals(256, wrapped.length)` MUST fail once the
+      migration lands. Without this rule that failure matches no classifier, falls to A4,
+      and — being unresolvable by the model with confidence — becomes EXEC-DIAG-008's gate.
+      The run would then end with a human engineering action for the one outcome the
+      baseline explicitly predicted. MODIFY_SOURCE stays prohibited: the assertion is
+      updated to the observed value, the implementation is not adjusted to satisfy the old
+      one. `baselineRequirementChanged: false` is asserted rather than left to the agent,
+      because the baseline said so before the failure happened.
+
 # ---------------------------------------------------------------------------
 # REPAIR_AUTHORIZATION
 # ---------------------------------------------------------------------------

@@ -19,7 +19,12 @@ export const PRECEDENCE: Partial<Record<ExecutionFamily, string[]>> = {
    * failure from the retry budget and must not be shadowed.
    */
   FAILURE_CLASSIFICATION: [
-    'EXEC-DIAG-005', // baseline invariant failing -> EXPECTED_BEHAVIOR_CHANGE, gate
+    'EXEC-DIAG-005', // MUST_PRESERVE invariant failing -> regression, gate
+    // Immediately after 005 and mutually exclusive with it: one covers the
+    // invariant that had to survive, the other the one that had to change. If a
+    // single assertion somehow carried both dispositions, the regression reading
+    // must win.
+    'EXEC-DIAG-013', // EXPECTED_TO_CHANGE invariant failing -> authorised update
     'EXEC-DIAG-012', // originates outside the boundary -> not repairable, no budget
     'EXEC-DIAG-007', // environment failure -> free retry, no budget
     'EXEC-DIAG-003', // dependency resolution

@@ -6,7 +6,7 @@
 | **Status** | `DELIVERED` |
 | **Depends on** | — |
 | **Unblocks** | PRD-06, PRD-07, PRD-09, PRD-12, PRD-13 |
-| **Demoable outcome** | None — foundation. Verified by test: the 110 rules reproduce the assessment the UX renders for the reference scenario. |
+| **Demoable outcome** | None — foundation. Verified by test: the rules reproduce the assessment the UX renders for the reference scenario. |
 | **Created** | 2026-08-28 |
 | **Delivered** | 2026-08-28 |
 
@@ -18,7 +18,8 @@
 ## 1. Problem
 
 The product's claim is that it decides deterministically and reasons only where judgment
-is genuinely required. 110 rules encode those decisions across two YAML files, but YAML
+is genuinely required. 110 rules encoded those decisions across two YAML files at the
+time of writing — 114 today — but YAML
 does not execute. Without an engine, every decision the rules describe would fall back to
 the model, and the guarantees would be prompt discipline rather than mechanism.
 

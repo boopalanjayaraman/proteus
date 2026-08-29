@@ -1,7 +1,7 @@
 import type {
   ApproveMigrationInput, Artifact, Assessment, Baseline, Evidence, ExecutionRun, Finding,
-  GraphEdge, GraphNode, GraphStyle, HumanGate, MigrationChange, MigrationRun, Project,
-  ProjectEvent, Recommendation, User,
+  GraphEdge, GraphNode, GraphStyle, HumanGate, MigrationAttempt, MigrationChange,
+  MigrationRun, Project, ProjectEvent, Recommendation, User,
 } from '@proteus/schema';
 
 /**
@@ -182,6 +182,23 @@ export class ApiClient {
     this.request<{ count: number; changes: MigrationChange[] }>(
       `/projects/${projectId}/changes`,
     );
+
+  /**
+   * The attempt history and the retry counters.
+   *
+   * `problems` is per problem rather than per run: the `n / 4` the screen shows
+   * is a budget against one unresolved problem, and a run-level count would say
+   * something else entirely.
+   */
+  attempts = (projectId: string) =>
+    this.request<{
+      count: number;
+      attempts: MigrationAttempt[];
+      problems: Array<{
+        problemKey: string; classification: string; signature: string;
+        meaningfulAttempts: number; budget: number; status: string;
+      }>;
+    }>(`/projects/${projectId}/migration/attempts`);
 
   artifacts = (projectId: string) =>
     this.request<{ artifacts: Artifact[] }>(`/projects/${projectId}/artifacts`);

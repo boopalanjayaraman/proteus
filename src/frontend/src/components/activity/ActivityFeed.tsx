@@ -15,6 +15,10 @@ const SEVERITY_COLOR: Record<string, string> = {
 
 const KIND = (e: ProjectEvent): string => e.type.replace(/_/g, ' ');
 
+/** A structured-failure payload, which renders as a block rather than a line. */
+const isJson = (message: string): boolean =>
+  message.startsWith('{') && message.includes('\n');
+
 const clock = (at: Date | string, since: Date | string | undefined): string => {
   if (!since) return '';
   const s = Math.max(0, Math.floor((new Date(at).getTime() - new Date(since).getTime()) / 1000));
@@ -66,7 +70,19 @@ export function ActivityFeed({ events, since, level, onLevel, status }: Props) {
                 <span className="mono feed-time">{clock(e.ts, since)}</span>
               </div>
               <div className="feed-text">{e.title}</div>
-              {e.message && <div className="mono feed-detail">{e.message}</div>}
+              {/* Spec §33's structured evidence is JSON and reads as JSON. A
+                  failure rendered as a paragraph loses the shape that makes it
+                  scannable, which is the whole reason it is structured. */}
+              {e.message && (isJson(e.message)
+                ? <pre className="mono feed-json">{e.message}</pre>
+                : <div className="mono feed-detail">{e.message}</div>)}
+              {e.refs.paths && e.refs.paths.length > 0 && (
+                <div className="feed-paths">
+                  {e.refs.paths.map((p) => (
+                    <span key={p} className="mono feed-path">{p.split('/').pop()}</span>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         ))}
