@@ -882,6 +882,31 @@ async function revertChange(
   attempt: MigrationAttempt,
   changeId: string,
 ): Promise<void> {
+  /*
+   * The working copy first, then the record.
+   *
+   * This used to mark the change REVERTED in Mongo and touch nothing else, so
+   * the feed said "reverting the previous attempt" while every file stayed
+   * exactly as that attempt had left it. The next repair was then written
+   * against a tree it had been told was clean — which is how a test came to call
+   * `new PartnerHandshakeMock(String)` against a no-arg constructor, and how the
+   * loop produced the stacked partial fixes EXEC-REP-003 exists to prevent
+   * while quoting EXEC-REP-003 in the event.
+   *
+   * A failed revert is reported and does not stop the attempt: the alternative
+   * is abandoning a run over a git operation, and the next build will surface
+   * whatever state the tree is in.
+   */
+  await deps.git.revertLastCommit(`attempt ${attempt.attemptNumber}`).catch(async (e) => {
+    await deps.repos.events.emit(run.projectId, {
+      type: 'PATCH_APPLIED', phase: 'MIGRATION', level: 'DETAIL', severity: 'WARN',
+      stage: 'REPAIRING',
+      title: 'Could not revert the previous attempt',
+      message: `${(e as Error).message} — the next patch is written on top of it.`,
+      actor: 'SYSTEM', refs: { attemptId: attempt.attemptId, changeId },
+    }).catch(() => undefined);
+  });
+
   await deps.repos.migrationChanges.collection.updateOne(
     { changeId } as never,
     { $set: { verificationOutcome: 'REVERTED', updatedAt: new Date() } as never },

@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import pino from 'pino';
@@ -851,5 +853,57 @@ describe('EXEC-TEST-008 — a characterization test may not pin what the plan ch
     // Refusing on an absent input would block every test in a caller that has
     // not been updated to pass the scope.
     expect(refusedByRule(guardTestArtifact(artifact()))).toBe(false);
+  });
+});
+
+describe('reverting an attempt actually reverts it', () => {
+  /**
+   * `revertChange` marked the change REVERTED in Mongo and touched nothing
+   * else. The feed said "Reverting the previous attempt first" — quoting
+   * EXEC-REP-003, which exists so partial fixes do not stack — while every file
+   * stayed exactly as that attempt had left it.
+   *
+   * The next repair was then written against a tree it had been told was clean.
+   * That is how a test came to call `new PartnerHandshakeMock(String)` against
+   * a no-arg constructor: the agent believed the earlier mock change was gone.
+   */
+  it('restores the file the reverted commit changed', async () => {
+    const repo = await makeTestRepo();
+    const git = new GitWriter(repo.dir, 'agent/pqc/test');
+    await git.createBranch(repo.baseCommitSha);
+
+    await git.writeFile('src/main/java/pay/Thing.java', 'class Thing { void a() {} }');
+    await git.commit('first', ['src/main/java/pay/Thing.java']);
+
+    await git.writeFile('src/main/java/pay/Thing.java', 'class Thing { void b(String s) {} }');
+    await git.commit('second — the attempt to undo', ['src/main/java/pay/Thing.java']);
+
+    await git.revertLastCommit('attempt 2');
+
+    const onDisk = await readFile(join(repo.dir, 'src/main/java/pay/Thing.java'), 'utf8');
+    // The file is back to what the first commit left, not the second.
+    expect(onDisk).toContain('void a()');
+    expect(onDisk).not.toContain('void b(String s)');
+    await repo.dispose();
+  });
+
+  it('keeps the revert in the history rather than dropping the commit', async () => {
+    // EXEC-REP-003 wants the diff reviewable. A branch that silently loses a
+    // commit is less reviewable, not more.
+    const repo = await makeTestRepo();
+    const git = new GitWriter(repo.dir, 'agent/pqc/test');
+    await git.createBranch(repo.baseCommitSha);
+
+    await git.writeFile('a.txt', 'one');
+    await git.commit('first', ['a.txt']);
+    await git.writeFile('a.txt', 'two');
+    await git.commit('second', ['a.txt']);
+
+    const before = await git.commitCount(repo.baseCommitSha);
+    await git.revertLastCommit('attempt 2');
+    const after = await git.commitCount(repo.baseCommitSha);
+
+    expect(after).toBeGreaterThan(before);
+    await repo.dispose();
   });
 });

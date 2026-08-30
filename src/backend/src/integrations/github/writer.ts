@@ -154,13 +154,45 @@ export class GitWriter {
     return Number(stdout.trim()) || 0;
   }
 
-  /** Pushes the migration branch. The token lives for the duration of the call. */
+  /**
+   * Undoes the last commit, in the working copy as well as the record.
+   *
+   * `git revert` rather than `reset --hard`: EXEC-REP-003 exists so the diff
+   * stays reviewable, and a branch that silently loses a commit is less
+   * reviewable, not more. The revert is itself a commit, so the reader can see
+   * that an attempt was made and withdrawn.
+   */
+  async revertLastCommit(reason: string): Promise<void> {
+    await this.git('revert', '--no-edit', '--no-gpg-sign', 'HEAD', '-m', '1')
+      .catch(async () => {
+        // A merge-free branch rejects `-m 1`; retry without it before giving up.
+        await this.git('revert', '--no-edit', '--no-gpg-sign', 'HEAD');
+      });
+    await this.git('commit', '--amend', '--no-edit', '--no-gpg-sign', '-m',
+      `Revert: ${reason}`).catch(() => undefined);
+  }
+
+  /**
+   * Pushes the migration branch. The token lives for the duration of the call.
+   *
+   * Forced, with a lease. A retry rebuilds the branch from the base commit, so
+   * its history is not a fast-forward of the previous attempt's and a plain push
+   * is rejected with "fetch first" — which is what happened, leaving the work
+   * committed locally and invisible.
+   *
+   * `--force-with-lease` rather than `--force`: it refuses if the remote moved
+   * for a reason this process does not know about. The branch is the agent's own
+   * — `agent/pqc/{projectId}`, rewritten by every run — so overwriting the
+   * previous attempt is the intent, but overwriting somebody's edit is not.
+   */
   async push(repositoryUrl: string, token: string): Promise<void> {
     const ref = parseRepositoryUrl(repositoryUrl);
     const authenticated =
       `https://x-access-token:${token}@github.com/${ref.owner}/${ref.repo}.git`;
     try {
-      await this.git('push', '--set-upstream', authenticated, this.branchName);
+      await this.git(
+        'push', '--force-with-lease', '--set-upstream', authenticated, this.branchName,
+      );
     } catch (e) {
       const raw = String((e as { stderr?: string }).stderr ?? (e as Error).message);
       throw new RepositoryAccessError(

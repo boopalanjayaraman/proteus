@@ -195,6 +195,32 @@ matches an assertion by the literal it pins, because Surefire reports
 after the colon, so every real report missed and only tests that happened to include the
 raw assertion in `relevantLogs` passed.
 
+**Amendment — 2026-08-30: a revert that reverted nothing, and a push that could not land**
+
+Two defects found in one run, both of which made the loop report something that had not
+happened.
+
+**`revertChange` never touched the working copy.** It set `verificationOutcome: 'REVERTED'`
+on the change record and emitted "Reverting the previous attempt first", citing EXEC-REP-003
+— the rule that exists so partial fixes do not stack — while every file stayed exactly as
+that attempt had left it. The next repair was then composed against a tree it had been told
+was clean, which is how a test came to call `new PartnerHandshakeMock(String)` against a
+no-arg constructor and break `testCompile`.
+
+`GitWriter.revertLastCommit` now undoes the commit for real. `git revert` rather than
+`reset --hard`, because EXEC-REP-003 wants the diff reviewable and a branch that silently
+loses a commit is less reviewable, not more — the withdrawal is visible. A failed revert is
+reported and does not abandon the run.
+
+**The push could not land on a retried run.** `push --set-upstream` was rejected with
+`! [rejected] ... (fetch first)`: a retry rebuilds the branch from the base commit, so its
+history is not a fast-forward of the previous attempt's. The work stayed committed locally
+and invisible — exactly when a human most needs to read it.
+
+Now `--force-with-lease`. The branch is the agent's own, `agent/pqc/{projectId}`, rewritten
+by every run, so overwriting the previous attempt is the intent — but the lease still
+refuses if the remote moved for a reason this process does not know about.
+
 **Deferred** —
 
 - **Verification and the sandbox.** PRD-13. The loop calls `onChangesApplied` when every
