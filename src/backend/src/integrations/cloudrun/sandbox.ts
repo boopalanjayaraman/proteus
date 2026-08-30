@@ -39,7 +39,17 @@ export interface DeploySpec {
 }
 
 export interface Deployed {
+  /** Where a person reaches it. Shown on screen and written into the report. */
   url: string;
+  /**
+   * Where *this process* reaches it, when that differs.
+   *
+   * On a VM the two are not the same, and picking either one for both breaks
+   * something: `127.0.0.1` is a link nobody can open, and a GCP instance cannot
+   * generally reach its own external IP, so probing the public address from
+   * inside times out on a container that started perfectly well.
+   */
+  probeUrl?: string;
   revision?: string;
   /** Frees whatever the deployment holds. Always call it for a local run. */
   dispose: () => Promise<void>;
@@ -79,7 +89,19 @@ export class LocalDockerDeployer implements SandboxDeployer {
   readonly kind = 'LOCAL_DOCKER' as const;
   readonly region = 'local';
 
-  constructor(private readonly hostPort = 0) {}
+  /**
+   * @param hostPort   fixed host port, or 0 to pick a free one.
+   * @param publicHost the address a *person* uses to reach the sandbox.
+   *
+   * The probe and the E2E scenarios run inside the same host as the container,
+   * so `127.0.0.1` is right for them and wrong for everyone else. On a VM the
+   * URL is also what gets shown on screen and put in the report — a loopback
+   * address there is a link nobody can open.
+   */
+  constructor(
+    private readonly hostPort = 0,
+    private readonly publicHost = process.env['SANDBOX_PUBLIC_HOST'] ?? '127.0.0.1',
+  ) {}
 
   async buildImage(spec: ImageSpec): Promise<BuiltImage> {
     const imageUri = `proteus-sandbox/${spec.tag}:${spec.commitSha.slice(0, 12)}`;
@@ -112,7 +134,8 @@ export class LocalDockerDeployer implements SandboxDeployer {
 
     const containerId = stdout.trim();
     return {
-      url: `http://127.0.0.1:${port}`,
+      url: `http://${this.publicHost}:${port}`,
+      probeUrl: `http://127.0.0.1:${port}`,
       revision: containerId.slice(0, 12),
       dispose: async () => {
         await run('docker', ['rm', '-f', spec.serviceName]).catch(() => undefined);

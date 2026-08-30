@@ -454,7 +454,9 @@ async function deploySandbox(
 
     // EXEC-VER-010 — deployed is not running. A revision can exist and serve
     // errors, and E2E results against a dead service are meaningless.
-    const probe = await probeStartup(deployed.url, {
+    // The address this process can reach, which on a VM is not the one shown.
+    const reachable = deployed.probeUrl ?? deployed.url;
+    const probe = await probeStartup(reachable, {
       ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
     });
     await set({
@@ -488,7 +490,7 @@ async function deploySandbox(
 
     // EXEC-VER-011 — against the deployed service, not a local harness.
     const e2eRun = await advance(repos, advanced, 'END_TO_END_VERIFYING');
-    const scenarios = await runScenarios(deployed.url, SETTLEMENT_SCENARIOS, {
+    const scenarios = await runScenarios(reachable, SETTLEMENT_SCENARIOS, {
       ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
       // FR-G. `runScenarios` already executes them one at a time and already has
       // each verdict; it simply reported once at the end. This is the phase a

@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
@@ -11,15 +12,35 @@ import { z } from 'zod';
  *
  * Absence is not an error: on Cloud Run the environment is already populated from
  * Secret Manager and there is no file to read.
+ *
+ * TWO candidates, because module-relative alone is wrong once the code is
+ * bundled. In development this file is `src/backend/src/config/env.ts`, so
+ * `../../.env` is `src/backend/.env`. The deployed build is a single
+ * `src/backend/dist/server.js`, where the identical expression resolves to
+ * `src/.env` — a path that has never existed. The first deployment failed with
+ * "missing MONGODB_URI" while a complete .env sat two directories away, which
+ * is a confusing way to spend an evening.
+ *
+ * Order matters: module-relative first so a developer running from an unrelated
+ * working directory still gets the package's own file, and only then the
+ * working directory, which is what the bundle has.
  */
 function loadDotEnv(): void {
-  const envPath = fileURLToPath(new URL('../../.env', import.meta.url));
-  if (!existsSync(envPath)) return;
-  try {
-    process.loadEnvFile(envPath);
-  } catch {
-    // A malformed .env should not take the process down before the config
-    // validator can produce a useful message about what is missing.
+  const candidates = [
+    fileURLToPath(new URL('../../.env', import.meta.url)),  // src/, running from source
+    fileURLToPath(new URL('../.env', import.meta.url)),     // dist/, running the bundle
+    resolve(process.cwd(), '.env'),                         // whatever started us
+  ];
+
+  for (const envPath of candidates) {
+    if (!existsSync(envPath)) continue;
+    try {
+      process.loadEnvFile(envPath);
+    } catch {
+      // A malformed .env should not take the process down before the config
+      // validator can produce a useful message about what is missing.
+    }
+    return;
   }
 }
 loadDotEnv();

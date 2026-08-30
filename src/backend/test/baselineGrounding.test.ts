@@ -97,3 +97,34 @@ describe('withdrawing an overwrite restores rather than deletes', () => {
     }
   }, 30_000);
 });
+
+describe('an acceptance test is not a regression', () => {
+  /**
+   * `ProteusKeyTransportRoundTripTest` asserts the peer key names ML-KEM. That
+   * is false until the migration lands — deliberately, or `EXEC-TEST-002` would
+   * call it vacuous. A run that had upgraded the provider but not yet migrated
+   * the transport was marked FAILED for `expected ML-KEM-768, found RSA`, which
+   * was simply the truth at that moment.
+   */
+  it('separates suites asserting the destination from those guarding the baseline', async () => {
+    const { suiteOf } = await import('../src/worker/migrationJob');
+
+    const kinds = new Map<string, string>([
+      ['src/test/java/pay/ProteusKeyTransportRoundTripTest.java', 'MIGRATION_ACCEPTANCE_TEST'],
+      ['src/test/java/pay/security/KeyTransportServiceTest.java', 'CHARACTERIZATION'],
+    ]);
+    const acceptance = [...kinds.entries()]
+      .filter(([, k]) => k === 'MIGRATION_ACCEPTANCE_TEST')
+      .map(([p]) => suiteOf(p));
+
+    expect(acceptance).toEqual(['pay.ProteusKeyTransportRoundTripTest']);
+    // The baseline suite stays in the regression surface, where a failure is real.
+    expect(acceptance).not.toContain('pay.security.KeyTransportServiceTest');
+  });
+
+  it('maps a nested test path to the suite name surefire reports', async () => {
+    const { suiteOf } = await import('../src/worker/migrationJob');
+    expect(suiteOf('src/test/java/pay/security/KeyTransportServiceTest.java'))
+      .toBe('pay.security.KeyTransportServiceTest');
+  });
+});

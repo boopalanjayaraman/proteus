@@ -447,8 +447,15 @@ export async function runTestEngineering(
 
     // The tests exist and fail. Now make them pass — the loop is the orchestrator's,
     // not the model's, so it can be checkpointed, resumed and bounded.
+    // Which suites assert the destination rather than guard the baseline. The
+    // probe is one; anything the agent wrote as an acceptance test is another.
+    const acceptanceSuites = [...kinds.entries()]
+      .filter(([, kind]) => kind === 'MIGRATION_ACCEPTANCE_TEST')
+      .map(([path]) => suiteOf(path))
+      .filter((s): s is string => Boolean(s));
+
     const loop = await runMigrationLoop(project, current, assessment, captured, {
-      repos, engine: deps.engine, model, executor, blobs,
+      repos, engine: deps.engine, model, executor, blobs, acceptanceSuites,
       logger: deps.logger,
       git, workdir: checkout.dir, commands,
     });

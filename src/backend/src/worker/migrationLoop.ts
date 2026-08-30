@@ -97,6 +97,21 @@ export interface LoopDeps {
   git: GitWriter;
   workdir: string;
   commands: BuildCommands;
+  /**
+   * Suites that are migration acceptance tests, by fully-qualified name.
+   *
+   * These assert the migration has HAPPENED, so they fail on the base commit by
+   * construction — `EXEC-TEST-002` calls one that passes there vacuous. Judging
+   * them per plan item therefore fails every build until the last item lands: a
+   * run that had upgraded the provider but not yet migrated the transport was
+   * marked failed for `expected ML-KEM-768, found RSA`, which was the truth and
+   * not a defect.
+   *
+   * They are the acceptance criterion, not the regression surface. Verification
+   * re-runs the whole suite at the head and is where they count — which is also
+   * where `REQUIRED_PQC_PRESENT` reads the round-trip probe.
+   */
+  acceptanceSuites?: string[];
   /** Continues into verification. PRD-13 supplies it. */
   onChangesApplied?: (run: MigrationRun) => void;
 }
@@ -391,8 +406,15 @@ async function runPlanItem(
 
     // Pre-existing failures are never attributed to the migration (EXEC-INV-002).
     const known = new Set(baseline.tests.knownFailures.map((f) => f.testId));
+    // Nor is an acceptance test that has not become true yet: it asserts the
+    // destination, and the plan is still in transit.
+    const acceptance = new Set(deps.acceptanceSuites ?? []);
     const newFailures = execution.inventory.tests.filter(
-      (t) => t.status === 'FAILED' && !known.has(t.testId),
+      (t) => t.status === 'FAILED' && !known.has(t.testId) && !acceptance.has(t.suite),
+    );
+
+    const pendingAcceptance = execution.inventory.tests.filter(
+      (t) => t.status === 'FAILED' && acceptance.has(t.suite),
     );
     /*
      * A failing command is forgiven only when tests actually ran and every
@@ -425,6 +447,17 @@ async function runPlanItem(
           : 'all tests green',
         actor: 'TOOL', refs: { attemptId: attempt.attemptId },
       });
+      if (pendingAcceptance.length > 0) {
+        await repos.events.emit(project.projectId, {
+          type: 'TEST_PASSED', phase: 'MIGRATION', level: 'ACTIVITY', severity: 'INFO',
+          stage: current.stage,
+          title: `${pendingAcceptance.length} acceptance assertion(s) not yet true`,
+          message: `${pendingAcceptance.map((t) => t.name).join(', ')} — these assert the `
+            + 'migration has completed and are expected to fail until it has. Verification '
+            + 'runs them at the head, and that is where they count.',
+          actor: 'TOOL', refs: { attemptId: attempt.attemptId },
+        });
+      }
       await closeAttempt(repos, attempt, 'SUCCEEDED');
       if (lastFailure) {
         await resolveThreadFor(deps, current, lastFailure);
