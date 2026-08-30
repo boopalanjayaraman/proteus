@@ -339,6 +339,23 @@ export async function runTestEngineering(
         paths: [PROBE_PATH],
         commitMessage: 'test(pqc): key transport round-trip probe',
         findingIds: [], planItemIds: [],
+        // A TEST change carries an integrity record or the schema refuses it
+        // (spec §26). Without this the commit failed, the probe stayed on disk
+        // — so it still ran, and REQUIRED_PQC_PRESENT still passed — but never
+        // reached the branch, leaving the pushed evidence package without the
+        // one test that proves the round trip.
+        //
+        // Nothing is being weakened here: the probe is generated from the
+        // repository's API surface, not by a model, and adds a file rather than
+        // altering a baseline expectation.
+        testIntegrity: {
+          failureClassification: 'TEST_COVERAGE_GAP',
+          reason: 'Proteus generates this probe from the repository API surface to establish '
+            + 'the key round trip. It adds coverage the repository lacked and changes no '
+            + 'existing assertion.',
+          baselineRequirementChanged: false,
+          safeAutonomousModification: true,
+        },
       }).catch((e) => log.warn(`could not commit the round-trip probe: ${(e as Error).message}`));
 
       written.push(PROBE_PATH);

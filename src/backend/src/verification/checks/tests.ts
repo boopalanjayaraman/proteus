@@ -78,8 +78,26 @@ export function checkTests(
 
   const currentStatus = new Map(current.inventory.tests.map((t) => [t.testId, t.status]));
 
+  /*
+   * "Did not run" and "now fails" are opposite facts, and this used to report
+   * both as the second one.
+   *
+   * `mvn verify` runs surefire then failsafe. When a unit test fails, Maven
+   * stops and the integration tests never execute — so their baseline entries
+   * have no current result. A run reported
+   * `PartnerHandshakeIntegrationTest#completesTheHandshakeWithTheAcquirer` as a
+   * regression when it had not been given the chance to run at all, while the
+   * actual failures were three unit tests in another suite entirely. Anyone
+   * reading the evidence package was pointed at the wrong file.
+   *
+   * Both still fail the check — you cannot claim a required test passed when it
+   * did not run — but they are counted and named separately.
+   */
   const regressions = baselinePassing.filter(
-    (id) => !known.has(id) && currentStatus.get(id) !== 'PASSED',
+    (id) => !known.has(id) && currentStatus.get(id) === 'FAILED',
+  );
+  const notRun = baselinePassing.filter(
+    (id) => !known.has(id) && currentStatus.get(id) === undefined,
   );
 
   // A generated test is identified by its suite, because one file produces many
@@ -94,6 +112,7 @@ export function checkTests(
   const acceptancePassed = generated.acceptance.filter(suitePassed);
 
   const passed = regressions.length === 0
+    && notRun.length === 0
     && characterizationFailed.length === 0
     && acceptanceFailed.length === 0;
 
@@ -117,6 +136,10 @@ export function checkTests(
             regressions.length > 0
               && `${regressions.length} test(s) that passed at baseline now fail: `
                 + regressions.slice(0, 5).join(', '),
+            notRun.length > 0
+              && `${notRun.length} test(s) that passed at baseline did not run — an `
+                + 'earlier phase failed and the build stopped before reaching them: '
+                + notRun.slice(0, 5).join(', '),
             acceptanceFailed.length > 0
               && `acceptance suite(s) failing: ${acceptanceFailed.join(', ')}`,
             characterizationFailed.length > 0

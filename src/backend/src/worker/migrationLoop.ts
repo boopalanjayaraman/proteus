@@ -167,7 +167,7 @@ export async function runMigrationLoop(
   ) as unknown as Finding[];
   const changeSets = changeSetsOf(items, findings);
 
-  for (const set of changeSets) {
+  for (const [setIndex, set] of changeSets.entries()) {
     // Applied but not yet judged. The set's last build decides for all of them.
     const deferred: string[] = [];
 
@@ -178,10 +178,14 @@ export async function runMigrationLoop(
         planItemId: item.planItemId,
       });
 
+      const isFinalItemOfPlan = setIndex === changeSets.length - 1
+        && index === set.length - 1;
+
       const result = await runPlanItem(
         project, current, item, assessment, baseline,
         { ...deps, migrationAgent, diagnostician, baselines, recorder, wc, log },
         index < set.length - 1,
+        isFinalItemOfPlan,
       );
 
       current = result.run;
@@ -286,6 +290,11 @@ async function runPlanItem(
   deps: ItemDeps,
   /** True while later items of the same change set are still unapplied. */
   deferFailure = false,
+  /**
+   * True for the final item of the final change set, when every approved change
+   * has landed and an acceptance test has no remaining excuse to be red.
+   */
+  judgeAcceptance = false,
 ): Promise<ItemResult> {
   const { repos, engine, log } = deps;
   let current = run;
@@ -408,7 +417,23 @@ async function runPlanItem(
     const known = new Set(baseline.tests.knownFailures.map((f) => f.testId));
     // Nor is an acceptance test that has not become true yet: it asserts the
     // destination, and the plan is still in transit.
-    const acceptance = new Set(deps.acceptanceSuites ?? []);
+    /*
+     * Acceptance tests are excused only while the plan is still in transit.
+     *
+     * Excluding them outright — which is what this did — means a *wrong*
+     * acceptance test is never diagnosed and never repaired. It stays green to
+     * the loop and fails at verification, where there is no repair path, so the
+     * run is permanently blocked by a test the agent wrote itself. One asserted
+     * the ML-KEM ciphertext was 1088 bytes; the correct KEM-then-wrap output is
+     * 1128, so the agent's own test refused the agent's own correct migration.
+     *
+     * Once the last approved change has landed they have no excuse left, and
+     * are judged like anything else — which is what puts them in front of the
+     * diagnosis and repair the loop exists to provide.
+     */
+    const acceptance = judgeAcceptance
+      ? new Set<string>()
+      : new Set(deps.acceptanceSuites ?? []);
     const newFailures = execution.inventory.tests.filter(
       (t) => t.status === 'FAILED' && !known.has(t.testId) && !acceptance.has(t.suite),
     );

@@ -24,3 +24,8 @@ schema/src/*.js
 
 # Logs
 *.log
+
+# Hackathon submission copy — drafted here for convenience, not part of the
+# product. Kept untracked so the repository stays the deliverable rather than
+# the pitch.
+SUBMISSION.md

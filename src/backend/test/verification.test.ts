@@ -415,6 +415,54 @@ describe('AC-5, FR-7 · a subset relation, not a count', () => {
     expect(result.regressions).toHaveLength(4);
   });
 
+  /**
+   * `mvn verify` runs surefire, then failsafe. A failing unit test stops the
+   * build, so the integration tests never execute and their baseline entries
+   * have no current result.
+   *
+   * That was reported as `2 test(s) that passed at baseline now fail`, naming
+   * two integration tests that had not been given the chance to run — while the
+   * real failures were three unit tests in an entirely different suite. Anyone
+   * reading the evidence package was pointed at the wrong file.
+   */
+  it('says a test did not run rather than calling it a regression', () => {
+    const before = baseline({
+      tests: {
+        executionRunId: 'e', total: 2, passed: 2, failed: 0, skipped: 0, knownFailures: [],
+        inventory: [
+          { testId: 'pay.UnitTest#a', name: 'a', suite: 'pay.UnitTest', status: 'PASSED' },
+          { testId: 'pay.IT#b', name: 'b', suite: 'pay.IT', status: 'PASSED' },
+        ],
+      },
+    });
+    // Surefire failed, so failsafe never ran: pay.IT has no result at all.
+    const after = inventoryOf([['pay.UnitTest', [{ name: 'a', failure: 'broke' }]]]);
+
+    const result = checkTests(before, { execution: execution(), inventory: after },
+      { characterization: [], acceptance: [] });
+
+    expect(result.result.status).toBe('FAIL');
+    // The one that actually failed is a regression.
+    expect(result.regressions).toEqual(['pay.UnitTest#a']);
+    // The one that never ran is reported as such, and not blamed.
+    expect(result.result.detail).toContain('did not run');
+    expect(result.result.detail).toContain('pay.IT#b');
+    expect(result.result.detail).not.toMatch(/pay\.IT#b[^:]*now fail/);
+  });
+
+  it('still fails when a required test merely vanished', () => {
+    const before = baseline({
+      tests: {
+        executionRunId: 'e', total: 1, passed: 1, failed: 0, skipped: 0, knownFailures: [],
+        inventory: [{ testId: 'pay.A#ok', name: 'ok', suite: 'pay.A', status: 'PASSED' }],
+      },
+    });
+    // Nothing ran. A migration cannot claim the suite passed.
+    const result = checkTests(before, { execution: execution(), inventory: inventoryOf([]) },
+      { characterization: [], acceptance: [] });
+    expect(result.result.status).toBe('FAIL');
+  });
+
   it('never blames the migration for a failure that was already red', () => {
     const before = baseline({
       tests: {
