@@ -27,6 +27,24 @@ export interface RepositoryContext {
   existingSuites: string[];
   /** Test files on disk, so the agent can extend rather than duplicate. */
   testPaths: string[];
+  /**
+   * The tests themselves — the actual baseline contract.
+   *
+   * `captureInvariants` was given test *counts* and suite *names* and asked what
+   * behaviour the migration must not break. There was no truthful answer in that
+   * context, so the model produced a plausible one: it invented
+   * `decapsulateSecret`, `getEncapsulationKeyBytes` and a `SettlementService`
+   * that does not exist in the repository, and reported `POST /settlements` as
+   * returning 200 where it returns 201.
+   *
+   * The invented contract then propagated — `generateTests` was told not to
+   * weaken it and wrote characterization tests implementing it, which failed on
+   * the base commit because the methods were never there.
+   *
+   * The baseline contract is not something to infer. It is already written down,
+   * in tests that already pass.
+   */
+  testSources: Array<{ path: string; content: string }>;
 }
 
 export interface MigrationContext {
@@ -72,23 +90,27 @@ export class TestEngineeringAgent {
         '',
         `Baseline test run: ${inventory.total} tests, ${inventory.passed} passed, `
           + `${inventory.failed} failed.`,
-        `Suites: ${inventory.suites.join(', ') || 'none'}`,
         '',
-        'The approved migration will change:',
-        ...migration.planItems.map(
-          (p) => `  - ${p.targetName}: ${p.action}`
-            + (p.expectedChanges.length
-              ? ` (${p.expectedChanges.flatMap((c) => c.paths).join(', ')})`
-              : ''),
-        ),
-        migration.target
-          ? `Approved target: ${migration.target.parameterSet ?? migration.target.target}`
-          : '',
+        // The contract, verbatim. Naming the suites and asking the model to
+        // recall what they assert is how a fabricated baseline gets written.
+        'THE TESTS THAT PASS TODAY. This is the behaviour, exactly as recorded:',
+        ...repo.testSources.map((t) => `--- ${t.path}\n${t.content}`),
         '',
-        'The components under migration:',
+        'The production code these exercise:',
         ...migration.sources.map((s) => `--- ${s.path}\n${s.excerpt}`),
         '',
-        'Capture the externally observable behaviour this migration could plausibly break.',
+        // Deliberately NOT told what the migration changes to. An invariant is
+        // an observation about the system as it is; shown the destination, the
+        // model described the destination — inventing ML-KEM method names and
+        // asserting 1088-byte ciphertexts about an RSA codebase.
+        'These files are the only evidence. Capture the externally observable',
+        'behaviour a change to this code could break.',
+        '',
+        'Every invariant must come from an assertion above. Do not invent a method,',
+        'a class or a status code — if it does not appear in the sources, it does not',
+        'exist. An invariant you cannot point at is worse than one you did not write:',
+        'it is checked, reported as preserved, and means nothing.',
+        '',
         'Every assertion must be executable. Prose will be discarded.',
       ].filter(Boolean).join('\n'),
     });
@@ -117,7 +139,11 @@ export class TestEngineeringAgent {
         ...migration.targetPaths.map((p) => `  - ${p}`),
         '',
         `Test suites that ran at baseline: ${repo.existingSuites.join(', ') || 'none'}`,
-        `Test files on disk: ${repo.testPaths.join(', ') || 'none'}`,
+        '',
+        // Coverage decided from what the tests assert, not from whether a file
+        // called FooTest.java exists beside Foo.java.
+        'The tests, in full:',
+        ...repo.testSources.map((t) => `--- ${t.path}\n${t.content}`),
         '',
         'The components under migration:',
         ...migration.sources.map((s) => `--- ${s.path}\n${s.excerpt}`),
@@ -149,7 +175,11 @@ export class TestEngineeringAgent {
       schema: z.object({ artifacts: z.array(GeneratedTestInput) }),
       prompt: [
         `Repository: ${repo.repositoryName} — ${repo.language}, ${repo.buildSystem}`,
-        `Existing test files: ${repo.testPaths.join(', ') || 'none'}`,
+        'EXISTING TESTS. These pass today and are the contract being preserved.',
+        'You may not write to any of these paths: replacing a test that judges the',
+        'migration is how a red suite is made green without fixing anything. If one',
+        'needs new cases, add a new file with a different name.',
+        ...repo.testSources.map((t) => `--- ${t.path}\n${t.content}`),
         '',
         'The baseline contract you must not weaken:',
         ...baseline.invariants.map(

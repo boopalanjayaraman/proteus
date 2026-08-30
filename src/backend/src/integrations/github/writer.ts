@@ -116,6 +116,29 @@ export class GitWriter {
   }
 
   /**
+   * Puts a path back the way the base commit had it.
+   *
+   * Withdrawing a rejected artifact used to mean deleting the file. That is
+   * right only when the agent *created* it. When it overwrote something, the
+   * delete takes the original with it — which is how a run lost eight passing
+   * tests and then reported them as regressions, because the agent had written
+   * its own `KeyTransportServiceTest.java` over the repository's.
+   *
+   * @returns true when a base version existed and was restored, false when the
+   *          path is new to this branch and the caller should delete instead.
+   */
+  async restoreFromBase(relativePath: string, baseCommitSha: string): Promise<boolean> {
+    try {
+      await this.git('checkout', baseCommitSha, '--', relativePath);
+      return true;
+    } catch {
+      // Not in the base tree: the agent created it, so there is nothing to
+      // restore and removing it is the correct withdrawal.
+      return false;
+    }
+  }
+
+  /**
    * Commits everything staged, refusing if the branch is not the migration one.
    *
    * The check is here rather than at the call site because there is exactly one

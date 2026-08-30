@@ -525,6 +525,59 @@ index [0], expected: <19> but was: <56>`) and **passes** KEM-then-wrap.
 
 ---
 
+## A baseline contract nobody had read
+
+Ten hours of debugging converged on this, and it was invisible until the prompts were
+recorded.
+
+`captureInvariants` is asked what behaviour the migration must not break. It was given:
+the repository name, `8 tests, 8 passed`, two suite **names**, the production source, and
+`Approved target: ML-KEM-768`.
+
+**No test source. `@Test` count in the prompt: zero.**
+
+There was no truthful answer available in that context, so the model produced a plausible
+one:
+
+| It reported | Reality |
+|---|---|
+| `POST /settlements` returns **200** | returns **201** |
+| `keyTransportService.decapsulateSecret(…)` | no such method |
+| `partnerKeys.getEncapsulationKeyBytes()` | no such method |
+| `settlementService.processAdvice(…)` | `SettlementService` is not in the repository |
+| `assertEquals(1088, …)`, `assertEquals(1184, …)` | ML-KEM sizes, in a capture of an RSA system |
+
+Induced, not spontaneous — and *steered*: shown the destination and asked about the origin,
+it described the destination. The rest came from generic priors about what a payments API
+looks like.
+
+Then it propagated. `generateTests` was told "the baseline contract you must not weaken"
+and wrote characterization tests implementing the fabrication, at the conventional paths —
+which is where the real tests already were. They failed on the base commit, `EXEC-TEST-001`
+correctly flagged them, and the withdrawal deleted those paths, taking the repository's own
+suite with it. The run then reported eight baseline tests as regressions. They had been
+erased.
+
+Worst of all, `✓ BASELINE INVARIANTS PRESERVED` came back green — over invariants naming
+methods that do not exist. A load-bearing check passing on fiction is worse than a red run.
+
+Four changes: the tests are supplied verbatim to invariant capture, coverage assessment and
+generation; the migration target is withheld while capturing the baseline; `EXEC-TEST-009`
+refuses any generated test that would overwrite a path passing at base; and withdrawal
+restores the base version instead of deleting, falling back to delete only for files the
+agent created.
+
+Re-run against the real agent afterwards: eight invariants, one per real test, every method
+real, HTTP 201 correct, including the round trip the whole exchange rests on.
+
+> Before concluding a model hallucinated, look at what it was asked and what it was given.
+> "Describe this system's behaviour" with no access to the tests has no honest answer — the
+> model is not being careless, it is being asked to guess. And the fabrication will be
+> *steered* by whatever concrete detail is in the prompt: leave the destination in a
+> question about the origin, and it will describe the destination.
+
+---
+
 ## Cross-cutting
 
 Three habits that would have caught most of the above:

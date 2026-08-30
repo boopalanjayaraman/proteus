@@ -24,7 +24,8 @@ import type { BehavioralInvariant, ChangeType, TestIntegrityRecord } from '@prot
 
 export type GuardRuleId =
   | 'EXEC-MOCK-004' | 'EXEC-MOCK-001' | 'EXEC-TEST-001'
-  | 'EXEC-TEST-002' | 'EXEC-TEST-004' | 'EXEC-TEST-007' | 'EXEC-TEST-008';
+  | 'EXEC-TEST-002' | 'EXEC-TEST-004' | 'EXEC-TEST-007' | 'EXEC-TEST-008'
+  | 'EXEC-TEST-009';
 
 export interface GuardRefusal {
   ruleId: GuardRuleId;
@@ -130,10 +131,42 @@ export function guardTestArtifact(
     invariants?: BehavioralInvariant[];
     /** Paths the approved plan will change. A characterization test must not pin them. */
     approvedPaths?: string[];
+    /** Test files that passed on the base commit. These are the contract. */
+    baselineTestPaths?: string[];
   } = {},
 ): GuardVerdict {
   const refusals: GuardRefusal[] = [];
   const applied: GuardRuleId[] = [];
+
+  /*
+   * EXEC-TEST-009 — a generated test may not overwrite one that already passes.
+   *
+   * A test green on the base commit is part of the contract the migration must
+   * preserve. Writing over it is the most direct way there is to make a red
+   * suite green without fixing anything, and it does not announce itself: the
+   * file keeps its name, the suite keeps its size, and what it asserts has
+   * changed underneath.
+   *
+   * It happened for a reason worth recording. `captureInvariants` was given test
+   * counts and suite names but no test source, so it invented a baseline —
+   * methods that do not exist, a class absent from the repository, HTTP 200 for
+   * an endpoint returning 201. `generateTests` was then told not to weaken that
+   * contract and wrote characterization tests implementing it, at the
+   * conventional paths, which are where the real tests already were.
+   *
+   * The prompt now carries the test sources, which should stop it. This is here
+   * because "should" is not a guarantee, and the damage is silent.
+   */
+  if (context.baselineTestPaths?.some((p) => p === artifact.path)) {
+    applied.push('EXEC-TEST-009');
+    refusals.push({
+      ruleId: 'EXEC-TEST-009',
+      classification: 'PROHIBITED_TEST_CONSTRUCTION',
+      reason: `${artifact.path} already passes on the base commit. A generated test may not `
+        + 'replace a test that is part of the baseline contract — add a new file under a '
+        + 'different name instead.',
+    });
+  }
 
   /*
    * EXEC-TEST-008 — a characterization test may not pin what the plan changes.

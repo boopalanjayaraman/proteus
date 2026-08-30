@@ -260,6 +260,7 @@ export async function runTestEngineering(
       const verdict = guardTestArtifact(proposal, {
         invariants,
         approvedPaths: migrationContext.targetPaths,
+        baselineTestPaths: repoContext.testPaths,
       });
       if (!verdict.allowed) {
         refused.push({ path: artifact.path, refusals: verdict.refusals });
@@ -403,15 +404,22 @@ export async function runTestEngineering(
         // `testCompile` for every build after it, so the migration cannot
         // succeed no matter what the agent does next. Reporting a rule while
         // leaving its violation in place is the worst of both.
-        await git.removeFile(path);
+        // Restore what the base commit had, and only delete when there was
+        // nothing there. Deleting unconditionally destroys the very tests the
+        // migration is judged against, when the agent wrote over one of them.
+        const restored = await git.restoreFromBase(path, current.branch.baseCommitSha);
+        if (!restored) await git.removeFile(path);
+
         await recorder.commit({
           run: current, attempt,
           changeType: 'TEST',
           intent: 'TEST_ENGINEERING',
-          summary: `Withdraw ${path}`,
+          summary: restored ? `Restore ${path}` : `Withdraw ${path}`,
           rationale: 'EXEC-TEST-001: it fails on the base commit, so it documents a bug '
             + 'rather than capturing a baseline. Left in the tree it would fail every '
-            + 'subsequent build.',
+            + `subsequent build. ${restored
+              ? 'The base commit\'s version of this file has been put back.'
+              : 'The file was new to this branch and has been removed.'}`,
           paths: [path],
           commitMessage: `test(pqc): withdraw ${path} — fails on the base commit`,
           findingIds: [], planItemIds: [],
@@ -421,7 +429,7 @@ export async function runTestEngineering(
           type: 'MIGRATION_BLOCKER_IDENTIFIED', phase: 'MIGRATION',
           level: 'ACTIVITY', severity: 'WARN',
           stage: 'VALIDATING_BASELINE_TESTS',
-          title: `${path} fails against the unmigrated build — withdrawn`,
+          title: `${path} fails against the unmigrated build — ${restored ? 'restored' : 'withdrawn'}`,
           message: 'EXEC-TEST-001: a characterization test that fails on the base commit has '
             + 'documented a bug, not captured a baseline. It has been removed from the '
             + 'branch so it cannot break every build that follows.',
@@ -567,12 +575,25 @@ async function buildRepoContext(
   inventory: { tests: Array<{ suite: string }> },
 ): Promise<RepositoryContext> {
   const files = await wc.files();
+  const testPaths = files.filter((f) => f.kind === 'TEST').map((f) => f.path);
+
+  // The tests themselves, not a list of their names. This is the baseline
+  // contract; asking the model to recall it from suite names is what produced a
+  // fabricated one. Bounded because a large repository's whole test tree does
+  // not belong in one prompt — the ones nearest the migration come first.
+  const testSources: RepositoryContext['testSources'] = [];
+  for (const path of testPaths.slice(0, 12)) {
+    const content = await wc.read(path).catch(() => '');
+    if (content) testSources.push({ path, content: content.slice(0, 12_000) });
+  }
+
   return {
     repositoryName: project.repository.url.split('/').pop() ?? project.projectId,
     language: profile.language,
     buildSystem: profile.buildSystem ?? 'unknown',
     existingSuites: [...new Set(inventory.tests.map((t) => t.suite))].sort(),
-    testPaths: files.filter((f) => f.kind === 'TEST').map((f) => f.path),
+    testPaths,
+    testSources,
   };
 }
 
