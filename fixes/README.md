@@ -294,6 +294,80 @@ human decision to a single transition that can fail independently of the thing i
 
 ---
 
+## An EventEmitter nobody listened to
+
+`EventsRepository.watch` attached a `'change'` handler and nothing else. A `ChangeStream`
+is an `EventEmitter`, and an `EventEmitter` that emits `'error'` with no listener does not
+return a rejected promise or hand the caller anything to catch — **it throws, out of band,
+from the driver's own tick.** In a Node process that is not a degraded subscriber. It is
+`uncaughtException`, and every migration running in that process dies with it.
+
+It surfaced as a red test suite: 478 tests passed and `npm test` still exited 1, because
+closing the client during teardown killed a live tail. That is the same event as a
+replica-set failover or a rolling restart in production.
+
+The stream now always listens, whether or not the caller passes a handler, closes itself,
+and reports. The SSE endpoint ends the response on it, so the browser reconnects with
+`Last-Event-ID` and resumes from `lastSent` — machinery that already existed. Holding a
+dead tail open would have been the worse failure: a screen that looks connected and
+silently stops updating.
+
+> An `'error'` event is not an error value. Every `EventEmitter` a long-lived process
+> holds needs a listener on it, and the cost of the missing one is never local.
+
+---
+
+## A question with no honest answer
+
+The loop applied one plan item, built, and treated a failing suite as a defect to diagnose
+and repair. For a cryptographic primitive swap that is not a defect — it is the middle of
+the change.
+
+`PartnerKeyProvider` generates the acquirer key pair; `CryptoService.wrapSessionKey` and
+`CryptoUtils.wrapKey` both wrap under it. Migrate the provider first and the wrappers get a
+key type their RSA transform rejects. Migrate a wrapper first and it gets an RSA key its KEM
+cannot use. **No order leaves the suite green after each single file.**
+
+So after every item, the loop asked the repair agent to make a correct-in-progress build
+green while the rest of the change set was still unapplied. Exactly one kind of edit does
+that: undoing the migration. Every RSA fallback, every mangled mock, every stacked partial
+fix traced back to this — not a confused model, but a loop asking a question with no honest
+answer, then punishing the model for answering it.
+
+The tell was sitting in `detect.ts` the whole time. Its comment described the identical
+hazard one stage earlier — a plan "internally valid and jointly impossible" — and I fixed it
+*for the plan* without asking whether execution had the same shape. It did.
+
+`changeSetsOf` groups items that must land together; only the set's last build is a verdict.
+
+> When a model keeps producing the same wrong answer, check what it is being asked. A
+> repair loop cannot distinguish "this is broken" from "this is unfinished" unless
+> something tells it which one it is looking at — and that something is not the model.
+
+---
+
+## A safety net that missed by one word
+
+`CRYPTO_OUTCOME_EXCEPTIONS` exists for exactly one job: stop `assertEquals(256,
+wrapped.length)` being read as a regression when ML-KEM-768 makes it 1128. Its comment says
+so. Without it the invariant stays `MUST_PRESERVE`, `EXEC-DIAG-005` outranks
+`EXEC-DIAG-004`, and a correct migration ends at a human gate.
+
+It read `wrapped\s*(key\s*)?(length|size|bytes)`. The fixture's assertion message is
+**"wrapped session key length on the wire"**. One unanticipated word in the gap, and the net
+did not catch the only thing it was built to catch.
+
+There was a test. It asserted `'Ciphertext length is 256 bytes'` and `'The wrapped session
+key is 256 bytes'` — phrasings invented while writing the test, both of which matched. The
+fixture's real string was never in it. So the test passed for years while the feature it
+covered did not work on the one input that mattered.
+
+> A regex over prose is a guess about phrasing. Test it against the string the system will
+> really see — copied, not paraphrased — or the test is only checking that you can write a
+> regex matching your own example.
+
+---
+
 ## Cross-cutting
 
 Three habits that would have caught most of the above:

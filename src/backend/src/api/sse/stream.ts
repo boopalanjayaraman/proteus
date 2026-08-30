@@ -84,9 +84,17 @@ export async function openEventStream(
   // the replay would drop anything written during it.
   const buffered: ProjectEvent[] = [];
   let replaying = true;
+  // A tail that dies is reported, never swallowed: the connection is ended so
+  // the browser reconnects with `Last-Event-ID` and resumes from `lastSent`.
+  // Holding a dead stream open would be worse than dropping it — the screen
+  // would look connected and simply stop updating.
+  const tail = { failed: false, notify: null as null | (() => void) };
   const stream: Subscription = repos.events.watch(projectId, (e) => {
     if (replaying) buffered.push(e);
     else send(e);
+  }, () => {
+    if (tail.notify) tail.notify();
+    else tail.failed = true;
   });
 
   const missed = await repos.events.since(projectId, fromSeq);
@@ -108,6 +116,11 @@ export async function openEventStream(
   };
 
   reply.raw.on('close', () => void close());
+
+  // Anything the tail reported while the replay was still running.
+  tail.notify = () => void close();
+  if (tail.failed) void close();
+
   return { close };
 }
 

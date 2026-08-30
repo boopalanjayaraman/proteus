@@ -73,11 +73,25 @@ None of this obstructs the migration. All of it makes finding the crypto real wo
 
 Worth keeping separate, because they carry different risk.
 
-**Rigged to fail** — these break the build after a correct migration, and exist so the
-repair loop has something to work on. There are exactly two, both in
-`PartnerHandshakeIntegrationTest`, and they are in **separate test methods on purpose**:
-in one method the handshake throws before the length assertion is reached, so the second
-failure would stay hidden until the first was repaired.
+**Rigged to fail** — this breaks the build after a correct migration, and exists so the
+repair loop has something to work on. There is now exactly **one**:
+`PartnerHandshakeMock` rejects any key type but `RSA_PUBLIC_KEY`, so
+`completesTheHandshakeWithTheAcquirer` throws once the migration lands. The repair is a
+single constant in a single file whose name ends in `Mock` — the cleanest possible
+`MOCK_INCOMPATIBILITY` signal for `EXEC-DIAG-004`.
+
+There were two. The second was `assertEquals(256, wrapped.length)`, repaired under
+`EXEC-DIAG-013` once the baseline invariant was classified `EXPECTED_TO_CHANGE` — and that
+classification runs a **regex over prose a model wrote**. One unanticipated phrasing and a
+correct migration ends at a human gate; that is precisely what happened, repeatedly, and it
+cost several demo runs. The rule and the exception both still exist and are still tested.
+They are simply no longer the thing a live demo depends on.
+
+The remaining failure was chosen because its classifier keys off *where* the legacy name
+appears — test and mock files only — which is a structural fact, not a phrasing. The
+assertion that replaced the length check compares against `acquirer.presentedKeyType()`
+rather than restating the literal, so the accepted key type lives in one place and the
+repair stays one edit.
 
 **Placed to be found** — deliberate, but nothing fails because of them. The coverage gap
 in `CryptoServiceTest`, the pinned `bcprov 1.72`, the second RSA wrap in `CryptoUtils`,

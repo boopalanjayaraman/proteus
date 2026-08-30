@@ -97,7 +97,11 @@ export class EventRepository extends Repository<typeof ProjectEvent> {
    * emitter would silently deliver nothing. This is what makes the fan-out
    * correct without adding Redis or Pub/Sub.
    */
-  watch(projectId: string, onEvent: (e: ProjectEvent) => void): Subscription {
+  watch(
+    projectId: string,
+    onEvent: (e: ProjectEvent) => void,
+    onError?: (e: Error) => void,
+  ): Subscription {
     const stream = this.collection.watch(
       [{ $match: { operationType: 'insert', 'fullDocument.projectId': projectId } }],
       { fullDocument: 'updateLookup' },
@@ -105,6 +109,19 @@ export class EventRepository extends Repository<typeof ProjectEvent> {
     stream.on('change', (change) => {
       const doc = (change as { fullDocument?: ProjectEvent }).fullDocument;
       if (doc) onEvent(doc);
+    });
+    // A ChangeStream is an EventEmitter, and an EventEmitter that emits 'error'
+    // with no listener *throws* — out of band, from the driver's own tick, where
+    // no caller can catch it. So a replica-set failover, a network blip, or a
+    // shutdown that closes the client under a live tail does not degrade one
+    // subscriber: it terminates the process, and every migration running in it.
+    //
+    // Always listen, therefore, even when the caller passes no handler. The
+    // stream is finished either way, so it is closed here rather than left as a
+    // handle that yields nothing.
+    stream.on('error', (e: Error) => {
+      void stream.close().catch(() => undefined);
+      onError?.(e);
     });
     return { close: () => stream.close() };
   }

@@ -1,0 +1,294 @@
+diff --git a/pom.xml b/pom.xml
+index e653aed..959b72e 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -39,7 +39,7 @@
+     <dependency>
+       <groupId>org.bouncycastle</groupId>
+       <artifactId>bcprov-jdk18on</artifactId>
+-      <version>1.72</version>
++      <version>1.79</version>
+     </dependency>
+ 
+     <!-- Token issuing for the merchant portal. -->
+diff --git a/src/main/java/pay/security/CryptoService.java b/src/main/java/pay/security/CryptoService.java
+index 20dd8cc..9bdebee 100644
+--- a/src/main/java/pay/security/CryptoService.java
++++ b/src/main/java/pay/security/CryptoService.java
+@@ -2,9 +2,16 @@ package pay.security;
+ 
+ import java.security.PublicKey;
+ import java.security.SecureRandom;
++import java.security.Security;
++import java.util.Arrays;
+ import javax.crypto.Cipher;
+ import javax.crypto.KeyGenerator;
+ import javax.crypto.SecretKey;
++import javax.crypto.spec.SecretKeySpec;
++import org.bouncycastle.jcajce.SecretKeyWithEncapsulation;
++import org.bouncycastle.jcajce.spec.KEMExtractSpec;
++import org.bouncycastle.jcajce.spec.KEMGenerateSpec;
++import org.bouncycastle.jce.provider.BouncyCastleProvider;
+ import org.springframework.stereotype.Service;
+ 
+ /**
+@@ -14,16 +21,39 @@ import org.springframework.stereotype.Service;
+  * The session key is generated locally and transported to the peer under the
+  * peer's public key. This is key transport, not signing: the primitive here
+  * carries a key, it does not attest to anything.
++ *
++ * Migrated from RSA-2048 key transport to ML-KEM-768 (FIPS 203).
++ *
++ * A KEM cannot transport a key chosen by the sender — it produces a shared
++ * secret both sides derive, which is not the same operation RSA WRAP_MODE
++ * performed. So the construction is KEM-then-wrap: encapsulate to the peer to
++ * agree a key-encryption key, then wrap the caller's session key under it with
++ * AES-KW. That keeps `wrapSessionKey(SecretKey, PublicKey)` meaning exactly
++ * what it meant before — the caller still chooses the session key — and leaves
++ * every caller source-compatible.
+  */
+ @Service
+ public class CryptoService {
+ 
+-    private static final String KEY_TRANSPORT_TRANSFORM =
+-            "RSA/ECB/OAEPWithSHA-256AndMGF1Padding";
++    static {
++        if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
++            Security.addProvider(new BouncyCastleProvider());
++        }
++    }
++
++    private static final String KEM = "ML-KEM";
++    private static final String KEY_WRAP_TRANSFORM = "AESWrap";
+ 
+     private static final String SESSION_CIPHER = "AES";
+     private static final int SESSION_KEY_BITS = 256;
+ 
++    /**
++     * ML-KEM-768 ciphertext length, fixed by FIPS 203. The wire format is the
++     * encapsulation followed by the wrapped session key, and a fixed-width
++     * prefix is what lets the receiver split the two without a length header.
++     */
++    private static final int ENCAPSULATION_BYTES = 1088;
++
+     private final SecureRandom random = new SecureRandom();
+ 
+     /** Fresh symmetric key for one settlement exchange. */
+@@ -37,21 +67,46 @@ public class CryptoService {
+      * Wraps the session key for transport to the acquirer.
+      *
+      * @param sessionKey the key to transport
+-     * @param peer       the acquirer's public key
+-     * @return the wrapped key, as sent on the wire
++     * @param peer       the acquirer's ML-KEM public key
++     * @return the encapsulation followed by the wrapped key, as sent on the wire
+      */
+     public byte[] wrapSessionKey(SecretKey sessionKey, PublicKey peer) throws Exception {
+-        Cipher cipher = Cipher.getInstance(KEY_TRANSPORT_TRANSFORM);
+-        cipher.init(Cipher.WRAP_MODE, peer, random);
+-        return cipher.wrap(sessionKey);
++        KeyGenerator kem = KeyGenerator.getInstance(KEM, BouncyCastleProvider.PROVIDER_NAME);
++        kem.init(new KEMGenerateSpec(peer, SESSION_CIPHER), random);
++        SecretKeyWithEncapsulation established = (SecretKeyWithEncapsulation) kem.generateKey();
++
++        Cipher wrapper = Cipher.getInstance(KEY_WRAP_TRANSFORM, BouncyCastleProvider.PROVIDER_NAME);
++        wrapper.init(Cipher.WRAP_MODE, keyEncryptionKey(established));
++        byte[] wrappedKey = wrapper.wrap(sessionKey);
++
++        byte[] encapsulation = established.getEncapsulation();
++        byte[] wire = new byte[encapsulation.length + wrappedKey.length];
++        System.arraycopy(encapsulation, 0, wire, 0, encapsulation.length);
++        System.arraycopy(wrappedKey, 0, wire, encapsulation.length, wrappedKey.length);
++        return wire;
+     }
+ 
+     /** Unwraps a session key received from the acquirer. */
+     public SecretKey unwrapSessionKey(byte[] wrapped, java.security.PrivateKey ours)
+             throws Exception {
+-        Cipher cipher = Cipher.getInstance(KEY_TRANSPORT_TRANSFORM);
+-        cipher.init(Cipher.UNWRAP_MODE, ours);
+-        return (SecretKey) cipher.unwrap(wrapped, SESSION_CIPHER, Cipher.SECRET_KEY);
++        if (wrapped == null || wrapped.length <= ENCAPSULATION_BYTES) {
++            throw new IllegalArgumentException("malformed wrapped session key");
++        }
++        byte[] encapsulation = Arrays.copyOfRange(wrapped, 0, ENCAPSULATION_BYTES);
++        byte[] wrappedKey = Arrays.copyOfRange(wrapped, ENCAPSULATION_BYTES, wrapped.length);
++
++        KeyGenerator kem = KeyGenerator.getInstance(KEM, BouncyCastleProvider.PROVIDER_NAME);
++        kem.init(new KEMExtractSpec(ours, encapsulation, SESSION_CIPHER));
++        SecretKeyWithEncapsulation established = (SecretKeyWithEncapsulation) kem.generateKey();
++
++        Cipher wrapper = Cipher.getInstance(KEY_WRAP_TRANSFORM, BouncyCastleProvider.PROVIDER_NAME);
++        wrapper.init(Cipher.UNWRAP_MODE, keyEncryptionKey(established));
++        return (SecretKey) wrapper.unwrap(wrappedKey, SESSION_CIPHER, Cipher.SECRET_KEY);
++    }
++
++    /** The KEM's shared secret, as an AES key-encryption key. */
++    private SecretKey keyEncryptionKey(SecretKeyWithEncapsulation established) {
++        return new SecretKeySpec(established.getEncoded(), SESSION_CIPHER);
+     }
+ 
+     /**
+@@ -59,6 +114,6 @@ public class CryptoService {
+      * the operator console and returned on every settlement response.
+      */
+     public String negotiatedKeyEstablishment() {
+-        return "RSA-2048";
++        return "ML-KEM-768";
+     }
+ }
+diff --git a/src/main/java/pay/security/PartnerKeyProvider.java b/src/main/java/pay/security/PartnerKeyProvider.java
+index f2546ae..83b885a 100644
+--- a/src/main/java/pay/security/PartnerKeyProvider.java
++++ b/src/main/java/pay/security/PartnerKeyProvider.java
+@@ -3,6 +3,9 @@ package pay.security;
+ import java.security.KeyPair;
+ import java.security.KeyPairGenerator;
+ import java.security.PublicKey;
++import java.security.Security;
++import org.bouncycastle.jcajce.spec.MLKEMParameterSpec;
++import org.bouncycastle.jce.provider.BouncyCastleProvider;
+ import org.springframework.stereotype.Component;
+ 
+ /**
+@@ -11,16 +14,27 @@ import org.springframework.stereotype.Component;
+  * The acquirer publishes its public key through the partner directory. The
+  * private half exists here only so the sandbox can complete a round trip
+  * without a live counterparty.
++ *
++ * Migrated to ML-KEM-768 (FIPS 203). The key material here is used for key
++ * ESTABLISHMENT only — it never signs anything, which is what makes a KEM the
++ * right replacement for the RSA key pair it succeeds.
+  */
+ @Component
+ public class PartnerKeyProvider {
+ 
++    static {
++        if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
++            Security.addProvider(new BouncyCastleProvider());
++        }
++    }
++
+     private final KeyPair acquirerKeyPair;
+ 
+     public PartnerKeyProvider() {
+         try {
+-            KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+-            generator.initialize(2048);
++            KeyPairGenerator generator =
++                    KeyPairGenerator.getInstance("ML-KEM", BouncyCastleProvider.PROVIDER_NAME);
++            generator.initialize(MLKEMParameterSpec.ml_kem_768);
+             this.acquirerKeyPair = generator.generateKeyPair();
+         } catch (Exception e) {
+             throw new IllegalStateException("cannot initialise acquirer key material", e);
+@@ -37,6 +51,6 @@ public class PartnerKeyProvider {
+ 
+     /** Identifies the key type presented during the handshake. */
+     public String keyType() {
+-        return "RSA_PUBLIC_KEY";
++        return "ML-KEM-768";
+     }
+ }
+diff --git a/src/main/java/pay/util/CryptoUtils.java b/src/main/java/pay/util/CryptoUtils.java
+index 1188ec9..2395c9f 100644
+--- a/src/main/java/pay/util/CryptoUtils.java
++++ b/src/main/java/pay/util/CryptoUtils.java
+@@ -2,10 +2,20 @@ package pay.util;
+ 
+ import java.nio.charset.StandardCharsets;
+ import java.security.MessageDigest;
++import java.security.PrivateKey;
+ import java.security.PublicKey;
++import java.security.SecureRandom;
++import java.security.Security;
++import java.util.Arrays;
+ import java.util.Base64;
+ import javax.crypto.Cipher;
++import javax.crypto.KeyGenerator;
+ import javax.crypto.SecretKey;
++import javax.crypto.spec.SecretKeySpec;
++import org.bouncycastle.jcajce.SecretKeyWithEncapsulation;
++import org.bouncycastle.jcajce.spec.KEMExtractSpec;
++import org.bouncycastle.jcajce.spec.KEMGenerateSpec;
++import org.bouncycastle.jce.provider.BouncyCastleProvider;
+ 
+ /**
+  * Shared helpers.
+@@ -15,6 +25,21 @@ import javax.crypto.SecretKey;
+  */
+ public final class CryptoUtils {
+ 
++    static {
++        if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
++            Security.addProvider(new BouncyCastleProvider());
++        }
++    }
++
++    private static final String KEM = "ML-KEM";
++    private static final String KEY_WRAP_TRANSFORM = "AESWrap";
++    private static final String WRAPPED_ALGORITHM = "AES";
++
++    /** ML-KEM-768 ciphertext length, fixed by FIPS 203. */
++    public static final int ENCAPSULATION_BYTES = 1088;
++
++    private static final SecureRandom RANDOM = new SecureRandom();
++
+     private CryptoUtils() { }
+ 
+     public static String sha256Hex(String input) {
+@@ -45,16 +70,47 @@ public final class CryptoUtils {
+      *
+      * Kept separate from CryptoService because the export runs outside a request
+      * and doesn't have the Spring context. Same transform though.
++     *
++     * Migrated from RSA-2048 key transport to ML-KEM-768 (FIPS 203). A KEM
++     * agrees a shared secret rather than transporting a caller-chosen key, so
++     * the construction is KEM-then-wrap: encapsulate to the recipient, then wrap
++     * the key under the resulting secret with AES-KW. The wire format is the
++     * encapsulation followed by the wrapped key.
+      */
+     public static byte[] wrapKey(SecretKey key, PublicKey recipient) throws Exception {
+-        Cipher c = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding");
+-        c.init(Cipher.WRAP_MODE, recipient);
+-        return c.wrap(key);
++        KeyGenerator kem = KeyGenerator.getInstance(KEM, BouncyCastleProvider.PROVIDER_NAME);
++        kem.init(new KEMGenerateSpec(recipient, WRAPPED_ALGORITHM), RANDOM);
++        SecretKeyWithEncapsulation established = (SecretKeyWithEncapsulation) kem.generateKey();
++
++        Cipher wrapper = Cipher.getInstance(KEY_WRAP_TRANSFORM, BouncyCastleProvider.PROVIDER_NAME);
++        wrapper.init(Cipher.WRAP_MODE, keyEncryptionKey(established));
++        byte[] wrappedKey = wrapper.wrap(key);
++
++        byte[] encapsulation = established.getEncapsulation();
++        byte[] wire = new byte[encapsulation.length + wrappedKey.length];
++        System.arraycopy(encapsulation, 0, wire, 0, encapsulation.length);
++        System.arraycopy(wrappedKey, 0, wire, encapsulation.length, wrappedKey.length);
++        return wire;
+     }
+ 
+-    // public static byte[] wrapKeyPkcs1(SecretKey k, PublicKey r) throws Exception {
+-    //     Cipher c = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+-    //     c.init(Cipher.WRAP_MODE, r);
+-    //     return c.wrap(k);
+-    // }
++    /** Reverses {@link #wrapKey}. */
++    public static SecretKey unwrapKey(byte[] wire, PrivateKey recipient) throws Exception {
++        if (wire == null || wire.length <= ENCAPSULATION_BYTES) {
++            throw new IllegalArgumentException("malformed wrapped key");
++        }
++        byte[] encapsulation = Arrays.copyOfRange(wire, 0, ENCAPSULATION_BYTES);
++        byte[] wrappedKey = Arrays.copyOfRange(wire, ENCAPSULATION_BYTES, wire.length);
++
++        KeyGenerator kem = KeyGenerator.getInstance(KEM, BouncyCastleProvider.PROVIDER_NAME);
++        kem.init(new KEMExtractSpec(recipient, encapsulation, WRAPPED_ALGORITHM));
++        SecretKeyWithEncapsulation established = (SecretKeyWithEncapsulation) kem.generateKey();
++
++        Cipher wrapper = Cipher.getInstance(KEY_WRAP_TRANSFORM, BouncyCastleProvider.PROVIDER_NAME);
++        wrapper.init(Cipher.UNWRAP_MODE, keyEncryptionKey(established));
++        return (SecretKey) wrapper.unwrap(wrappedKey, WRAPPED_ALGORITHM, Cipher.SECRET_KEY);
++    }
++
++    private static SecretKey keyEncryptionKey(SecretKeyWithEncapsulation established) {
++        return new SecretKeySpec(established.getEncoded(), WRAPPED_ALGORITHM);
++    }
+ }

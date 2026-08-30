@@ -15,6 +15,8 @@ import { Repositories } from '../../src/core/repositories';
 export interface TestDb {
   repos: Repositories;
   client: MongoClient;
+  /** For tests that need a second connection of their own. */
+  uri: string;
   stop: () => Promise<void>;
 }
 
@@ -31,6 +33,7 @@ export async function startTestDb(): Promise<TestDb> {
   return {
     repos: new Repositories(db),
     client,
+    uri: replSet.getUri(),
     stop: async () => {
       __setHandle(null);
       await client.close();

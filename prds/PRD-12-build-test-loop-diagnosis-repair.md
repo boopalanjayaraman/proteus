@@ -221,8 +221,43 @@ Now `--force-with-lease`. The branch is the agent's own, `agent/pqc/{projectId}`
 by every run, so overwriting the previous attempt is the intent — but the lease still
 refuses if the remote moved for a reason this process does not know about.
 
+**Amendment — 2026-08-30: a change set is judged once, when all of it has landed**
+
+The loop applied one plan item, built, and treated a failing suite as a defect to diagnose
+and repair. That is right for an item that stands on its own, and wrong for a
+cryptographic primitive swap.
+
+`payments-api` is the case in miniature. `PartnerKeyProvider` generates the acquirer key
+pair; `CryptoService.wrapSessionKey` and `CryptoUtils.wrapKey` both wrap under it. Migrate
+the provider first and the two wrappers are handed a key type their RSA transform rejects.
+Migrate a wrapper first and it is handed an RSA key its KEM cannot use. **There is no order
+in which the suite is green after each single file** — the four changes are one change.
+
+Judged item by item, every one of those intermediate states looks like a defect. The
+repair agent was then asked to make a correct-in-progress build green with the rest of the
+change set unapplied, and the only edit that does that is undoing the migration. That is
+where the RSA fallbacks came from: not a confused model, but the loop asking a question
+with no honest answer. `detect.ts` already named this hazard for the *plan* — "internally
+valid and jointly impossible" — and the same hazard existed one stage later, in execution.
+
+`changeSetsOf` groups approved items by crypto usage: `KEY_TRANSPORT` and
+`KEY_ESTABLISHMENT` are atomic. Within a set only the last item's build is a verdict; the
+earlier ones emit an INFO row saying the set is incomplete and are neither completed nor
+blocked. If the set fails at the end, every item in it is reported blocked — naming only
+the last would point a reviewer at a file that is very likely correct.
+
+The grouping is deliberately coarse. Two unrelated key-transport systems in one repository
+would be grouped together and their failure attributed slightly later. Nothing is admitted
+that would otherwise be caught, because the set's final build still has to pass, and the
+opposite error is the one that cost several runs. The sharper version is per-key-material,
+which is what the `REQUIRES_MIGRATION_WITH` relationship already in the schema is for; it
+is a strictly narrower grouping and can replace this without changing the contract.
+
 **Deferred** —
 
+- **`REQUIRES_MIGRATION_WITH` is still unproduced.** Nothing writes the edge and nothing
+  reads it. Change sets are grouped by usage instead, which is coarser than the graph
+  could be if the builder recorded which findings share key material.
 - **Verification and the sandbox.** PRD-13. The loop calls `onChangesApplied` when every
   plan item is green; nothing supplies it yet, and `EXEC-REP-004` already gates deployment
   on a verification verdict that does not exist.

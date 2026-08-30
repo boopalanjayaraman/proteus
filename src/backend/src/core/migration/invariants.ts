@@ -37,8 +37,20 @@ export const DEFAULT_DISPOSITION: Record<InvariantKind, Disposition> = {
  * `EXEC-INV-003` names these as exceptions to the MUST_PRESERVE default: key
  * establishment must still succeed, but the algorithm it names and the encoding
  * of the secret it produces are the migration doing its job.
+ *
+ * The gap between the noun and its measurement is deliberate. This first read
+ * `wrapped\s*(key\s*)?(length|size|bytes)`, which matches "wrapped key length"
+ * and misses "wrapped **session** key length" — the exact phrasing the fixture
+ * uses. One unanticipated word, and the invariant stayed MUST_PRESERVE,
+ * `EXEC-DIAG-005` outranked `EXEC-DIAG-004`, and the run ended at a human gate
+ * that this constant exists specifically to prevent.
+ *
+ * So the qualifier is a short unbounded window rather than an enumerated word.
+ * A description is prose written by a model; matching it on an exact word
+ * sequence is a guess about phrasing dressed up as a rule.
  */
-const CRYPTO_OUTCOME_EXCEPTIONS = /algorithm\s*(identifier|name|id)|negotiated|shared[-\s]?secret\s*encoding|key\s*(type|encoding)|cipher(text)?\s*(length|size|bytes)|wrapped\s*(key\s*)?(length|size|bytes)/i;
+const CRYPTO_OUTCOME_EXCEPTIONS =
+  /algorithm\s*(identifier|name|id)|negotiated|shared[-\s]?secret\s*encoding|key\s*(type|encoding)|(cipher(text)?|encapsulation|wrapped)[\w\s.-]{0,32}?(length|size|bytes|encoding)/i;
 
 /** Only an externally contractualised format survives the MESSAGE_FORMAT default. */
 const EXTERNALLY_CONTRACTUALISED = /\b(contract|contractual|partner agreement|published (api|schema)|external consumer|wire contract|interface specification)\b/i;

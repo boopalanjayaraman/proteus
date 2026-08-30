@@ -1,5 +1,5 @@
 import {
-  type Assessment, type Baseline, type Diagnosis, type MigrationAttempt,
+  type Assessment, type Baseline, type Diagnosis, type Finding, type MigrationAttempt,
   type MigrationRun, type PlanItem, type Project, type StructuredFailure,
 } from '@proteus/schema';
 import { DiagnosticAgent } from '../agent/flows/diagnosis';
@@ -9,6 +9,7 @@ import type { Logger } from '../config/logger';
 import { WorkingCopy } from '../core/discovery/workingCopy';
 import { advance, BaselineService, type BuildCommands } from '../core/migration/baseline';
 import { ChangeRecorder, closeAttempt, openAttempt } from '../core/migration/changes';
+import { changeSetsOf } from '../core/migration/changeSets';
 import {
   authoriseRepair, classifyDeterministically, factsForFailure, touchedInvariant,
   unclassified, LEGACY_ALGORITHM, type Classification, type DiagnosisContext,
@@ -141,27 +142,58 @@ export async function runMigrationLoop(
   };
   let current = run;
 
-  for (const item of items) {
-    // The cursor is the plan item, so a restarted worker resumes at the item it
-    // was on rather than replaying the ones already committed.
-    current = await advance(repos, current, 'APPLYING_MIGRATION_CHANGES', {
-      planItemId: item.planItemId,
-    });
+  // Items that have to land together, because a primitive swap is one change
+  // however many files it touches. Within a set, only the last item's build is
+  // a verdict; the earlier ones are mid-migration by construction.
+  const findings = await repos.findings.find(
+    { projectId: project.projectId } as never,
+  ) as unknown as Finding[];
+  const changeSets = changeSetsOf(items, findings);
 
-    const result = await runPlanItem(
-      project, current, item, assessment, baseline,
-      { ...deps, migrationAgent, diagnostician, baselines, recorder, wc, log },
-    );
+  for (const set of changeSets) {
+    // Applied but not yet judged. The set's last build decides for all of them.
+    const deferred: string[] = [];
 
-    current = result.run;
-    outcome.attempts += result.attempts;
-    outcome.autonomousRepairs += result.repairs;
-    if (result.completed) outcome.completed.push(item.planItemId);
-    else outcome.blocked.push({
-      planItemId: item.planItemId,
-      reason: result.reason ?? 'unresolved',
-      ...(result.gateId ? { gateId: result.gateId } : {}),
-    });
+    for (const [index, item] of set.entries()) {
+      // The cursor is the plan item, so a restarted worker resumes at the item it
+      // was on rather than replaying the ones already committed.
+      current = await advance(repos, current, 'APPLYING_MIGRATION_CHANGES', {
+        planItemId: item.planItemId,
+      });
+
+      const result = await runPlanItem(
+        project, current, item, assessment, baseline,
+        { ...deps, migrationAgent, diagnostician, baselines, recorder, wc, log },
+        index < set.length - 1,
+      );
+
+      current = result.run;
+      outcome.attempts += result.attempts;
+      outcome.autonomousRepairs += result.repairs;
+
+      if (result.deferred) {
+        deferred.push(item.planItemId);
+        continue;
+      }
+      if (result.completed) {
+        // The build that passed covers everything applied since the last verdict.
+        outcome.completed.push(...deferred, item.planItemId);
+        deferred.length = 0;
+        continue;
+      }
+
+      // The set could not be made to work. Everything in it is blocked, not just
+      // the item that happened to be last — reporting only the last one would
+      // point a reviewer at a file that is very likely correct.
+      for (const planItemId of [...deferred, item.planItemId]) {
+        outcome.blocked.push({
+          planItemId,
+          reason: result.reason ?? 'unresolved',
+          ...(result.gateId ? { gateId: result.gateId } : {}),
+        });
+      }
+      deferred.length = 0;
+    }
   }
 
   await repos.migrationRuns.collection.updateOne(
@@ -209,6 +241,12 @@ interface ItemDeps extends LoopDeps {
 interface ItemResult {
   run: MigrationRun;
   completed: boolean;
+  /**
+   * The change this item made is applied and committed, but the suite was not
+   * judged: more of its change set is still to land. Neither completed nor
+   * blocked — the group's last item decides for all of them.
+   */
+  deferred?: boolean;
   attempts: number;
   repairs: number;
   reason?: string;
@@ -229,6 +267,8 @@ async function runPlanItem(
   assessment: Assessment,
   baseline: Baseline,
   deps: ItemDeps,
+  /** True while later items of the same change set are still unapplied. */
+  deferFailure = false,
 ): Promise<ItemResult> {
   const { repos, engine, log } = deps;
   let current = run;
@@ -370,6 +410,27 @@ async function runPlanItem(
         await resolveThreadFor(deps, current, lastFailure);
       }
       return { run: current, completed: true, attempts, repairs };
+    }
+
+    // ---- 2b. Not every failing build is a defect -----------------------
+    // A cryptographic primitive cannot be half-replaced across a call graph and
+    // still produce a green suite. While the rest of this change set is
+    // unapplied, a failure here is a mid-migration state, and diagnosing it
+    // would ask the repair agent to make a correct-in-progress build green with
+    // the other files still on the old primitive. The only edit that does that
+    // is undoing the migration — which is exactly what kept happening.
+    if (deferFailure) {
+      await repos.events.emit(project.projectId, {
+        type: 'TEST_FAILED', phase: 'MIGRATION', level: 'ACTIVITY', severity: 'INFO',
+        stage: current.stage,
+        title: `${item.targetName} applied — change set incomplete`,
+        message: `${newFailures.length} test${newFailures.length === 1 ? '' : 's'} failing `
+          + 'while the rest of this change set is unapplied. Not diagnosed: the suite is '
+          + 'judged once every item in the set has landed.',
+        actor: 'TOOL', refs: { attemptId: attempt.attemptId },
+      });
+      await closeAttempt(repos, attempt, 'FAILED');
+      return { run: current, completed: false, deferred: true, attempts, repairs };
     }
 
     // ---- 3. Structure the evidence (spec §33, FR-4) --------------------

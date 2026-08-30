@@ -757,6 +757,198 @@ describe('AC-8 · the reference scenario, end to end', () => {
   }, 60_000);
 });
 
+describe('a change set is judged once, when all of it has landed', () => {
+  /**
+   * The defect this covers cost several runs of the demo.
+   *
+   * A primitive swap touches every site that uses it, and there is no order in
+   * which the suite is green after each single file: migrate the key provider
+   * first and the wrappers are handed a key type their transform rejects;
+   * migrate a wrapper first and it is handed a key its KEM cannot use. Judged
+   * item by item, every intermediate state looks like a defect — and the only
+   * edit that makes a correct-in-progress build green with the rest of the set
+   * unapplied is undoing the migration. That is where the RSA fallbacks came
+   * from: not a confused model, but the loop asking an impossible question.
+   */
+  it('does not diagnose a failure while the rest of the set is unapplied', async () => {
+    const items = [
+      planItem({
+        planItemId: 'plan_1', targetName: 'PartnerKeyProvider', findingIds: ['fnd_1'], order: 0,
+        expectedChanges: [{
+          changeType: 'SOURCE',
+          paths: ['src/main/java/pay/security/PartnerKeyProvider.java'],
+          description: 'generate an ML-KEM pair',
+        }],
+      }),
+      planItem({
+        planItemId: 'plan_2', targetName: 'CryptoUtils', findingIds: ['fnd_2'], order: 1,
+        expectedChanges: [{
+          changeType: 'SOURCE',
+          paths: ['src/main/java/pay/util/CryptoUtils.java'],
+          description: 'wrap under the KEM secret',
+        }],
+      }),
+    ];
+    const { project, run } = await approvedProject(repo.baseCommitSha, items);
+
+    // Both sites are key transport, so they are one change set.
+    for (const id of ['fnd_1', 'fnd_2']) {
+      await t.repos.findings.insert({
+        _schemaVersion: 1, createdAt: new Date(), updatedAt: new Date(),
+        findingId: id, projectId: project.projectId,
+        category: 'CRYPTOGRAPHIC',
+        title: 'RSA-2048 key transport',
+        summaryLine: 'Usage: key transport → Target: ML-KEM-768',
+        description: 'RSA-2048 wraps a key sent to the acquirer.',
+        crypto: { algorithm: 'RSA', usage: 'KEY_TRANSPORT', quantumVulnerable: true },
+        severity: 'CRITICAL',
+        impact: 'MIGRATION_REQUIRED',
+        disposition: 'AUTONOMOUS_MIGRATION',
+        agentIntent: 'Replace the RSA wrap with ML-KEM-768 encapsulation.',
+        locations: [{ path: 'src/main/java/pay/security/CryptoService.java', startLine: 51 }],
+        nodeIds: [], evidenceIds: [],
+        origin: 'REPOSITORY_SCAN',
+        dedupeKey: `rsa|KEY_TRANSPORT|${id}`,
+        status: 'PLANNED',
+        discoveredAt: new Date(),
+      } as never);
+    }
+
+    const runs = [
+      { exitCode: 0, log: 'BUILD SUCCESS' },
+      {
+        exitCode: 0,
+        log: '[INFO] Tests run: 1, Failures: 0\n[INFO] BUILD SUCCESS',
+        reports: [surefireReport('pay.security.SettlementSignerTest', [{ name: 'signs' }])],
+      },
+      {
+        // plan_1 has landed and plan_2 has not: the exporter is still on RSA and
+        // is now handed an ML-KEM key. Correct-in-progress, not a defect.
+        exitCode: 1,
+        log: '[ERROR] Tests run: 2, Failures: 1\n'
+          + 'java.security.InvalidKeyException: unknown key type passed to RSA\n'
+          + '[INFO] BUILD FAILURE',
+        reports: [
+          surefireReport('pay.security.SettlementSignerTest', [{ name: 'signs' }]),
+          surefireReport('pay.LegacySettlementExporterTest', [{
+            name: 'buildsAnExportEnvelope',
+            failure: 'unknown key type passed to RSA',
+          }]),
+        ],
+      },
+      {
+        // plan_2 lands and the set is complete.
+        exitCode: 0,
+        log: '[INFO] Tests run: 2, Failures: 0\n[INFO] BUILD SUCCESS',
+        reports: [
+          surefireReport('pay.security.SettlementSignerTest', [{ name: 'signs' }]),
+          surefireReport('pay.LegacySettlementExporterTest', [
+            { name: 'buildsAnExportEnvelope' },
+          ]),
+        ],
+      },
+    ];
+    let call = 0;
+    const stepping = {
+      environment: 'CLOUD_BUILD' as const,
+      async run(spec: { command: string }) {
+        void spec;
+        const answer = runs[Math.min(call++, runs.length - 1)]!;
+        return {
+          exitCode: answer.exitCode ?? 0,
+          status: (answer.exitCode ?? 0) === 0 ? 'SUCCESS' as const : 'FAILURE' as const,
+          log: answer.log ?? '',
+          logExcerpt: (answer.log ?? '').split('\n').filter(Boolean),
+          durationMs: 1000,
+          reports: answer.reports ?? [],
+          provider: {},
+        };
+      },
+    };
+
+    const patch = (planItemId: string, path: string, findingId: string) => ({
+      planItemId, changeType: 'SOURCE' as const,
+      summary: `Migrate ${path} to ML-KEM-768`,
+      rationale: 'CNSA 2.0 requires ML-KEM for key establishment',
+      findingIds: [findingId],
+      files: [{
+        path, operation: 'MODIFIED' as const,
+        content: `// ML-KEM-768\npackage pay;\npublic class X${findingId} {}\n`,
+      }],
+    });
+
+    const patches = [
+      patch('plan_1', 'src/main/java/pay/security/PartnerKeyProvider.java', 'fnd_1'),
+      patch('plan_2', 'src/main/java/pay/util/CryptoUtils.java', 'fnd_2'),
+    ];
+    const base = new ScriptedModel({
+      'baseline-invariants': {
+        invariants: [{
+          kind: 'API_BEHAVIOR',
+          description: 'POST /settlements accepts a valid advice',
+          assertion: 'assertEquals(201, response.getStatusCode());',
+          capturedFrom: 'EXISTING_TEST',
+        }],
+      },
+      'coverage-assessment': { components: [] },
+      'generate-tests': { artifacts: [] },
+    });
+    // One patch per item, in order — ScriptedModel answers a purpose once.
+    let patchCall = 0;
+    const model = {
+      modelName: 'scripted',
+      async generate(req: { purpose: string; schema: { safeParse: (v: unknown) => never } }) {
+        if (req.purpose !== 'migration-patch') return base.generate(req as never);
+        const answer = patches[Math.min(patchCall++, patches.length - 1)];
+        const parsed = req.schema.safeParse(answer) as unknown as
+          { success: boolean; data: unknown; error?: { issues: unknown } };
+        if (!parsed.success) {
+          throw new Error(`scripted patch rejected: ${JSON.stringify(parsed.error?.issues)}`);
+        }
+        return {
+          output: parsed.data, model: 'scripted',
+          promptTokens: 0, outputTokens: 0, latencyMs: 0,
+        };
+      },
+    } as never;
+
+    const outcome = await runTestEngineering(project, run, {
+      repos: t.repos,
+      projects: null as never,
+      engine,
+      model,
+      executor: stepping,
+      blobs: new InMemoryBlobStore(),
+      logger,
+      workdir: repo.dir,
+    });
+
+    const loop = outcome.loop!;
+    // Both items completed, on the strength of the build that ran after the
+    // whole set had landed.
+    expect(loop.completed.sort()).toEqual(['plan_1', 'plan_2']);
+    expect(loop.blocked).toEqual([]);
+
+    // The mid-set failure was never treated as a defect: no diagnosis, no
+    // repair, no gate, and nothing charged to the retry budget.
+    expect(loop.autonomousRepairs).toBe(0);
+    expect(await t.repos.humanGates.count()).toBe(0);
+    expect(await t.repos.problemThreads.find({ projectId: project.projectId } as never))
+      .toHaveLength(0);
+
+    const events = await t.repos.events.since(project.projectId, 0);
+    expect(events.some((e) => e.type === 'FAILURE_DIAGNOSED')).toBe(false);
+    expect(events.some((e) => e.type === 'AUTONOMOUS_REPAIR_STARTED')).toBe(false);
+
+    // It is reported, though — silence would be worse than a wrong diagnosis.
+    const noted = events.find(
+      (e) => e.type === 'TEST_FAILED' && e.title.includes('change set incomplete'),
+    );
+    expect(noted).toBeDefined();
+    expect(noted!.severity).toBe('INFO');
+  }, 60_000);
+});
+
 describe('AC-6, FR-2 · every iteration is a checkpoint', () => {
   it('records the plan item it was on, so a restart resumes there', async () => {
     const { project, run } = await approvedProject(repo.baseCommitSha);

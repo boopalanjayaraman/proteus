@@ -130,6 +130,31 @@ describe('AC-5 · change stream fan-out', () => {
     expect(seen).toContain('mine');
     expect(seen).not.toContain('someone elses');
   });
+
+  /**
+   * A ChangeStream is an EventEmitter, and one that emits 'error' with no
+   * listener throws out of band — killing the process, not the subscriber.
+   * Every migration running in that process dies with it, which is a very
+   * expensive way to survive a replica-set failover.
+   */
+  it('reports a dying tail instead of taking the process down with it', async () => {
+    const { MongoClient } = await import('mongodb');
+    const { Repositories } = await import('../src/core/repositories');
+
+    const own = new MongoClient(t.uri);
+    await own.connect();
+    const repos = new Repositories(own.db('proteus_test'));
+
+    let reported: Error | null = null;
+    repos.events.watch('PQC-0001', () => undefined, (e) => { reported = e; });
+    await new Promise((r) => setTimeout(r, 300)); // let the stream establish
+
+    // Exactly what a shutdown or a failover does underneath a live tail.
+    await own.close();
+    await new Promise((r) => setTimeout(r, 300));
+
+    expect(reported).not.toBeNull();
+  });
 });
 
 describe('AC-6 · redaction at the write boundary', () => {

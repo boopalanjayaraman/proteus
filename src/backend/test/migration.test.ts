@@ -416,6 +416,47 @@ describe('AC-3, FR-4, FR-5, FR-6 · invariants are classified by rule', () => {
     expect(classified[1]!.override?.reason).toMatch(/EXEC-INV-003 exception/);
   });
 
+  /**
+   * The wording above is invented, and that is how the bug survived: the
+   * exception matched "ciphertext length" and "wrapped key length" but not
+   * "wrapped **session** key length", which is what `PartnerHandshakeIntegrationTest`
+   * actually says. One word in the gap, and the demo ended at a human gate this
+   * exception exists to prevent.
+   *
+   * So these assert the fixture's own strings, verbatim.
+   */
+  it('classifies the fixture’s own wording, not a paraphrase of it', () => {
+    const { classified } = classifyAll([
+      {
+        kind: 'CRYPTO_OUTCOME',
+        description: 'wrapped session key length on the wire',
+        assertion: 'assertEquals(256, wrapped.length, "wrapped session key length on the wire");',
+        capturedFrom: 'EXISTING_TEST',
+      },
+      {
+        kind: 'CRYPTO_OUTCOME',
+        description: 'The acquirer presents an RSA public key type during the handshake',
+        assertion: 'assertEquals("RSA_PUBLIC_KEY", partner.lastSeenKeyType());',
+        capturedFrom: 'EXISTING_TEST',
+      },
+    ], 'PQC-0184');
+
+    expect(classified.map((c) => c.invariant.disposition))
+      .toEqual(['EXPECTED_TO_CHANGE', 'EXPECTED_TO_CHANGE']);
+  });
+
+  it('still preserves an outcome that only happens to mention a wrapped key', () => {
+    const { classified } = classifyAll([{
+      kind: 'CRYPTO_OUTCOME',
+      description: 'A settlement whose wrapped key is rejected returns 400 to the caller',
+      assertion: 'assertEquals(400, response.getStatusCode());',
+      capturedFrom: 'EXISTING_TEST',
+    }], 'PQC-0184');
+    // The window is short on purpose: "wrapped key ... 400" is a failure mode,
+    // not a measurement of the ciphertext.
+    expect(classified[0]!.invariant.disposition).toBe('MUST_PRESERVE');
+  });
+
   it('keeps key establishment itself as must-preserve', () => {
     const { classified } = classifyAll([{
       kind: 'CRYPTO_OUTCOME', description: 'Key establishment succeeds with a valid peer',
