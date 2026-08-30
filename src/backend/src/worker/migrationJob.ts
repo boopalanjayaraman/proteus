@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { apiSurfaceOf } from '../core/migration/apiSurface';
 import { approvedTargetOf } from '../core/migration/target';
+import { AgentActionRecorder } from '../core/services/agentActions';
+import { recordingModel } from '../agent/model';
 import { PROBE_PATH, probeShapeOf, probeSource } from '../core/migration/roundTripProbe';
 import {
   type Assessment, type BehavioralInvariant, type MigrationRun, type Project,
@@ -89,7 +91,15 @@ export async function runTestEngineering(
   run: MigrationRun,
   deps: MigrationJobDeps,
 ): Promise<TestEngineeringOutcome> {
-  const { repos, model, executor, blobs } = deps;
+  const { repos, executor, blobs } = deps;
+
+  // Every model call from here on is recorded — prompt, response, tokens — so a
+  // failed run can be diagnosed from what the agent was actually asked rather
+  // than from a reconstruction of what it probably was.
+  const recorder = new AgentActionRecorder(repos, blobs, {
+    projectId: project.projectId, migrationRunId: run.migrationRunId,
+  });
+  const model = recordingModel(deps.model, (r) => recorder.record(r));
   const log = deps.logger.child({ projectId: project.projectId, job: 'migration' });
   const holder = `worker-${randomUUID().slice(0, 8)}`;
 

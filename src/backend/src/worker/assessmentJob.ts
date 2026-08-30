@@ -12,6 +12,8 @@ import { ensurePolicy } from '../core/services/policy';
 import type { BlobStore } from '../integrations/storage/blobs';
 import { buildSnapshot, renderMarkdown } from '../reports/assessment';
 import type { Logger } from '../config/logger';
+import { AgentActionRecorder } from '../core/services/agentActions';
+import { recordingModel } from '../agent/model';
 
 /**
  * The assessment job.
@@ -36,7 +38,10 @@ export async function runAssessment(
   project: Project,
   deps: AssessmentJobDeps,
 ): Promise<Assessment> {
-  const { repos, engine, model } = deps;
+  const { repos, engine } = deps;
+  const model = recordingModel(deps.model, (r) => new AgentActionRecorder(
+    repos, deps.blobs, { projectId: project.projectId },
+  ).record(r));
   const log = deps.logger.child({ projectId: project.projectId, job: 'assessment' });
 
   const dispositions = new DispositionService(repos, engine);

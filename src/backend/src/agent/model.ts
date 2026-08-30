@@ -170,3 +170,89 @@ export class ScriptedModel implements ModelClient {
     };
   }
 }
+
+/**
+ * One model call, as it happened.
+ *
+ * `GeminiClient` built the prompt, sent it, and discarded it. `agent_actions`
+ * has existed since PRD-02 — with `promptGcsUri` for spilling large payloads —
+ * and the report reads it and prints a count. Nothing ever wrote a row.
+ *
+ * The cost was not academic. Debugging a failed migration meant reconstructing
+ * the agent's inputs by hand from the code, testing the reconstruction, and
+ * reporting the result as though it described the system. Two runs behaved
+ * differently on the same prompt template and there was no way to see why,
+ * because nobody had kept what was sent.
+ *
+ * For a product whose claim is auditable evidence, the one artefact never
+ * captured was what the agent was actually asked.
+ */
+export interface ModelCallRecord {
+  purpose: string;
+  system?: string;
+  prompt: string;
+  model: string;
+  status: 'SUCCESS' | 'ERROR';
+  error?: string;
+  /** The parsed output, when the call succeeded and validated. */
+  output?: unknown;
+  promptTokens: number;
+  outputTokens: number;
+  latencyMs: number;
+  startedAt: Date;
+  endedAt: Date;
+}
+
+/**
+ * Wraps a client so every call is recorded, including the ones that throw.
+ *
+ * A decorator rather than a field on `GeminiClient`, because `agent/` may not
+ * reach the database: the sink is supplied by `worker/`, which may see both
+ * layers. The sink never affects the call — a recorder that could fail a
+ * migration by failing to record it would be worse than no recorder.
+ */
+export function recordingModel(
+  inner: ModelClient,
+  sink: (record: ModelCallRecord) => void,
+): ModelClient {
+  return {
+    modelName: inner.modelName,
+    async generate(req) {
+      const startedAt = new Date();
+      const emit = (r: Omit<ModelCallRecord, 'startedAt' | 'endedAt' | 'model'>) => {
+        try {
+          sink({ ...r, model: inner.modelName, startedAt, endedAt: new Date() });
+        } catch {
+          // Recording is observability, never a failure mode of the migration.
+        }
+      };
+
+      try {
+        const result = await inner.generate(req);
+        emit({
+          purpose: req.purpose,
+          ...(req.system ? { system: req.system } : {}),
+          prompt: req.prompt,
+          status: 'SUCCESS',
+          output: result.output,
+          promptTokens: result.promptTokens,
+          outputTokens: result.outputTokens,
+          latencyMs: result.latencyMs,
+        });
+        return result;
+      } catch (e) {
+        // The failures are the ones most worth having: a refused schema or a
+        // truncated response is invisible without the prompt that produced it.
+        emit({
+          purpose: req.purpose,
+          ...(req.system ? { system: req.system } : {}),
+          prompt: req.prompt,
+          status: 'ERROR',
+          error: (e as Error).message,
+          promptTokens: 0, outputTokens: 0, latencyMs: Date.now() - startedAt.getTime(),
+        });
+        throw e;
+      }
+    },
+  };
+}

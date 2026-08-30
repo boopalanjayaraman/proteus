@@ -68,6 +68,29 @@ function scrub(value: unknown, ancestors: Set<object> = new Set(), depth = 0): u
   }
 }
 
+/**
+ * pino's level labels, in the vocabulary Cloud Logging indexes.
+ *
+ * Without this every line arrives as `DEFAULT` severity, so the console cannot
+ * filter errors and none of them page anyone. `level` also arrives as a number,
+ * which is the field Cloud Logging would otherwise show instead of the message.
+ */
+const GCP_SEVERITY: Record<string, string> = {
+  trace: 'DEBUG', debug: 'DEBUG', info: 'INFO',
+  warn: 'WARNING', error: 'ERROR', fatal: 'CRITICAL',
+};
+
+/**
+ * Whether to emit Cloud Logging's structured shape.
+ *
+ * `K_SERVICE` is set by Cloud Run itself, so a deployed service needs no
+ * configuration. `LOG_FORMAT=GCP` covers a GCE VM running the ops agent, which
+ * ingests the same JSON from stdout but sets no marker of its own.
+ */
+export function useCloudLogging(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env['K_SERVICE']) || env['LOG_FORMAT'] === 'GCP';
+}
+
 export function createLogger(
   level: string,
   pretty: boolean,
@@ -77,6 +100,8 @@ export function createLogger(
    * the redaction that survives pino's own serialisation.
    */
   destination?: pino.DestinationStream,
+  /** Defaults to auto-detection; a test passes it explicitly. */
+  cloudLogging: boolean = useCloudLogging(),
 ): Logger {
   const options: pino.LoggerOptions = {
     level,
@@ -101,6 +126,18 @@ export function createLogger(
     },
     ...(pretty && !destination
       ? { transport: { target: 'pino-pretty', options: { translateTime: 'HH:MM:ss', ignore: 'pid,hostname' } } }
+      : {}),
+    // Cloud Logging reads `severity`, `message` and an ISO `timestamp`. pino's
+    // defaults are `level` (a number), `msg` and epoch millis, none of which it
+    // recognises — so a deployed run would show numeric levels and no message
+    // text at all. Redaction and the scrub hook above are untouched: this only
+    // renames the envelope.
+    ...(cloudLogging
+      ? {
+          messageKey: 'message',
+          formatters: { level: (label: string) => ({ severity: GCP_SEVERITY[label] ?? 'DEFAULT' }) },
+          timestamp: () => `,"timestamp":"${new Date().toISOString()}"`,
+        }
       : {}),
   };
   return destination ? pino(options, destination) : pino(options);

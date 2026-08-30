@@ -13,6 +13,8 @@ import { GraphService } from '../core/services/graph';
 import type { ProjectService } from '../core/services/projects';
 import { GitHubReader, parseRepositoryUrl, permalink } from '../integrations/github/client';
 import type { Logger } from '../config/logger';
+import { AgentActionRecorder } from '../core/services/agentActions';
+import { recordingModel } from '../agent/model';
 
 /**
  * The discovery job — clone, scan, reason, persist, graph.
@@ -42,7 +44,10 @@ export interface DiscoveryJobDeps {
 }
 
 export async function runDiscovery(project: Project, deps: DiscoveryJobDeps): Promise<void> {
-  const { repos, projects, engine, model } = deps;
+  const { repos, projects, engine } = deps;
+  const model = recordingModel(deps.model, (r) => new AgentActionRecorder(
+    repos, undefined, { projectId: project.projectId },
+  ).record(r));
   const github = deps.github ?? new GitHubReader();
   const discovery = new DiscoveryService(repos, new GraphService(repos));
   const agent = new DiscoveryAgent(model);

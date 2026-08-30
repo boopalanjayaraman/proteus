@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Writable } from 'node:stream';
-import { createLogger } from '../src/config/logger';
+import { createLogger, useCloudLogging } from '../src/config/logger';
 
 /**
  * The operational logger (TD-008).
@@ -70,5 +70,50 @@ describe('log redaction survives real objects', () => {
     const out = log({ message: `cloned with ghp_${'a'.repeat(36)} ok` });
     expect(out).not.toContain('ghp_aaaa');
     expect(out).toContain('[REDACTED]');
+  });
+});
+
+describe('Cloud Logging shape', () => {
+  const lines = (): { write: (s: string) => void; all: string[] } => {
+    const all: string[] = [];
+    return { write: (s: string) => all.push(s), all };
+  };
+
+  it('emits severity, message and an ISO timestamp', () => {
+    const sink = lines();
+    const log = createLogger('info', false, sink as never, true);
+    log.warn({ projectId: 'PQC-0001' }, 'branch could not be pushed');
+
+    const row = JSON.parse(sink.all[0]!);
+    // Cloud Logging indexes these three. pino's defaults — a numeric `level`,
+    // `msg`, and epoch millis — are not recognised by any of them.
+    expect(row.severity).toBe('WARNING');
+    expect(row.message).toBe('branch could not be pushed');
+    expect(row.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T.*Z$/);
+    expect(row.level).toBeUndefined();
+    expect(row.projectId).toBe('PQC-0001');
+  });
+
+  it('maps every pino level to a severity Cloud Logging understands', () => {
+    const sink = lines();
+    const log = createLogger('trace', false, sink as never, true);
+    log.trace('a'); log.debug('b'); log.info('c');
+    log.warn('d'); log.error('e'); log.fatal('f');
+    expect(sink.all.map((l) => JSON.parse(l).severity))
+      .toEqual(['DEBUG', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']);
+  });
+
+  it('still redacts under the Cloud Logging formatters', () => {
+    const sink = lines();
+    const log = createLogger('info', false, sink as never, true);
+    log.info({ githubToken: 'ghp_realtokenvalue0000000000' }, 'cloning');
+    expect(sink.all[0]).not.toContain('ghp_realtokenvalue');
+    expect(sink.all[0]).toContain('[REDACTED]');
+  });
+
+  it('turns itself on under Cloud Run and off locally', () => {
+    expect(useCloudLogging({ K_SERVICE: 'proteus-api' } as never)).toBe(true);
+    expect(useCloudLogging({ LOG_FORMAT: 'GCP' } as never)).toBe(true);
+    expect(useCloudLogging({} as never)).toBe(false);
   });
 });
