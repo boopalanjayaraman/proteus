@@ -553,3 +553,53 @@ describe('CORS — the frontend is never the same origin', () => {
     await s.stop();
   });
 });
+
+describe('the stream carries CORS itself', () => {
+  /**
+   * `openEventStream` writes with `reply.raw.writeHead`, which bypasses
+   * Fastify's reply lifecycle — that is the point, because the handler owns the
+   * socket for the life of the run. The cost is that `@fastify/cors`'s `onSend`
+   * hook never runs, so the response went out with no
+   * `Access-Control-Allow-Origin` and every browser silently dropped it.
+   *
+   * The failure looked like a server that sent nothing: the preflight passed,
+   * the request reached the handler, the events were written, and the browser
+   * discarded the whole response. Only the live feed broke — every other
+   * endpoint goes through the normal reply path and got its header for free.
+   */
+  it('sets Access-Control-Allow-Origin on the raw stream response', async () => {
+    const s = await startTestServer(t.repos, { allowedOrigins: ['https://proteus.example'] });
+    const project = await t.repos.projects.create(aProject({ ownerId: 'uid-1' }) as never);
+
+    const ctrl = new AbortController();
+    const res = await fetch(`${s.url}/projects/${project.projectId}/stream`, {
+      headers: {
+        ...authFor('uid-1'),
+        accept: 'text/event-stream',
+        'last-event-id': '0',
+        origin: 'https://proteus.example',
+      },
+      signal: ctrl.signal,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://proteus.example');
+    ctrl.abort();
+    await s.stop();
+  });
+
+  it('sends no origin header when CORS is not configured', async () => {
+    // Nothing to echo, and inventing one would be worse than omitting it.
+    const s = await startTestServer(t.repos);
+    const project = await t.repos.projects.create(aProject({ ownerId: 'uid-1' }) as never);
+
+    const ctrl = new AbortController();
+    const res = await fetch(`${s.url}/projects/${project.projectId}/stream`, {
+      headers: { ...authFor('uid-1'), accept: 'text/event-stream', 'last-event-id': '0' },
+      signal: ctrl.signal,
+    });
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
+    ctrl.abort();
+    await s.stop();
+  });
+});

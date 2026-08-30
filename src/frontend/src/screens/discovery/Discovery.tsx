@@ -44,7 +44,11 @@ export function Discovery() {
   const [level, setLevel] = useState<EventLevel | 'ALL'>('ALL');
   const version = useRef(-1);
 
-  const { events, status } = useProjectStream(id);
+  // SYSTEM carries "project created"; ASSESSMENT is the hand-off this screen
+  // announces. Migration and sandbox lines belong to the other live screen.
+  const { events, status } = useProjectStream(id, {
+    phases: ['SYSTEM', 'DISCOVERY', 'ASSESSMENT'],
+  });
 
   const refetch = useCallback(async () => {
     if (!id) return;

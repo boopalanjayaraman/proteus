@@ -35,13 +35,39 @@ export async function openEventStream(
   projectId: string,
   fromSeq: number,
 ): Promise<StreamHandle> {
-  reply.raw.writeHead(200, {
+  /**
+   * Written on the raw socket, so CORS has to be carried across by hand.
+   *
+   * `reply.raw.writeHead` bypasses Fastify's reply lifecycle entirely — which is
+   * the point, because the handler owns this socket for the life of the run.
+   * The cost is that `@fastify/cors`'s `onSend` hook never runs, so the response
+   * went out with no `Access-Control-Allow-Origin` and every browser dropped it.
+   *
+   * The failure looked like a server that never sent anything: the preflight
+   * passed, the request reached the handler, the events were written, and the
+   * browser discarded the whole response. Only the live feed was affected —
+   * every other endpoint goes through the normal reply path.
+   *
+   * The header is copied from what `cors` already decided for this request
+   * rather than recomputed, so there is one allowlist and not two.
+   */
+  const allowOrigin = reply.getHeader('access-control-allow-origin');
+  const headers: Record<string, string> = {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache, no-transform',
     Connection: 'keep-alive',
     // Proxies that buffer would defeat the point of a stream.
     'X-Accel-Buffering': 'no',
-  });
+  };
+  if (allowOrigin !== undefined) {
+    headers['Access-Control-Allow-Origin'] = String(allowOrigin);
+    const vary = reply.getHeader('vary');
+    if (vary !== undefined) headers['Vary'] = String(vary);
+    const credentials = reply.getHeader('access-control-allow-credentials');
+    if (credentials !== undefined) headers['Access-Control-Allow-Credentials'] = String(credentials);
+  }
+
+  reply.raw.writeHead(200, headers);
 
   let lastSent = fromSeq;
   let closed = false;

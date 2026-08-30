@@ -36,7 +36,11 @@ export function Migration() {
   const [error, setError] = useState<string | null>(null);
   const [level, setLevel] = useState<EventLevel | 'ALL'>('ALL');
 
-  const { events, status } = useProjectStream(id);
+  // The run and everything it produces. Replaying discovery above the first
+  // migration line buried the thing the screen exists to show.
+  const { events, status } = useProjectStream(id, {
+    phases: ['MIGRATION', 'VERIFICATION', 'SANDBOX'],
+  });
   const seen = useRef(0);
 
   const load = useCallback(async () => {
