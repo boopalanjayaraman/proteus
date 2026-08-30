@@ -544,7 +544,11 @@ export function progressFromEvents(
       const suite = [...bySuite.values()].find((s) => s.short === e.message?.split(' · ')[0]);
       const row = suite ?? lastFailed;
       if (row) {
-        row.failed.push({ method });
+        // Deduped by name: the loop re-runs a suite after every repair, so a
+        // method that fails twice emits twice. Accumulating them showed a suite
+        // reporting "2 tests" above four rows, which reads as the count being
+        // wrong rather than the list being doubled.
+        if (!row.failed.some((f) => f.method === method)) row.failed.push({ method });
         lastFailed = row;
       }
       continue;
@@ -665,3 +669,123 @@ export function expiryLabel(expiresAt: string | Date | undefined, now = Date.now
   const hours = Math.max(1, Math.round(ms / 3_600_000));
   return `EXPIRES IN ${hours} HOUR${hours === 1 ? '' : 'S'}`;
 }
+
+// ---------------------------------------------------------------------------
+// What a person is actually supposed to do
+// ---------------------------------------------------------------------------
+
+export interface NextStep {
+  label: string;
+  detail: string;
+}
+
+/**
+ * The blocking check, and what unblocks it.
+ *
+ * A run that ends unverified sets `actionRequired`, and often has no open gate
+ * — the loop did not stop to ask a question, it ran out of attempts and handed
+ * over. "Human action required" with no gate and no options is a dead end: it
+ * says a person is needed without saying what for.
+ *
+ * The nine checks are ordered, and later ones are gated on earlier ones passing
+ * (EXEC-REP-004). So the first failure is the only one worth acting on — the
+ * rest are its consequences, and telling someone to fix eight things when seven
+ * are downstream of the first is worse than saying nothing.
+ */
+/**
+ * Causal precedence — which failure explains which.
+ *
+ * Deliberately not `CHECK_ORDER`, which is spec §35's *display* order and puts
+ * the baseline invariants first. A reader wants them in that order; a diagnosis
+ * needs them in the order they depend on each other, and conflating the two
+ * would make one of the two wrong.
+ */
+const CAUSAL_ORDER = [
+  'BUILD_SUCCESSFUL',
+  'REQUIRED_TESTS_PASSED',
+  'BASELINE_INVARIANTS_PRESERVED',
+  'PROHIBITED_CRYPTO_ABSENT',
+  'REQUIRED_PQC_PRESENT',
+  'MIGRATION_POLICY_SATISFIED',
+  'NO_CRITICAL_BLOCKER',
+  'SANDBOX_DEPLOYMENT_SUCCESSFUL',
+  'E2E_VERIFICATION_SUCCESSFUL',
+] as const;
+
+/** Checks that only ever fail because something earlier did. */
+const DOWNSTREAM = new Set(['SANDBOX_DEPLOYMENT_SUCCESSFUL', 'E2E_VERIFICATION_SUCCESSFUL']);
+
+export function rootBlocker(
+  checks: Array<{ check: string; status: string }>,
+): { check: string; downstream: string[] } | null {
+  const failed = (CAUSAL_ORDER as readonly string[]).filter(
+    (c) => checks.some((x) => x.check === c && x.status === 'FAIL'),
+  );
+  const first = failed.find((c) => !DOWNSTREAM.has(c)) ?? failed[0];
+  if (!first) return null;
+  return { check: first, downstream: failed.filter((c) => c !== first) };
+}
+
+/** What it takes to reach the sandbox, given the blocker. */
+export function nextSteps(check: string): NextStep[] {
+  const common: NextStep[] = [
+    {
+      label: 'Read the diff',
+      detail: 'The branch is pushed. Every change the agent made is on it, and the '
+        + 'evidence package explains why each was made.',
+    },
+    {
+      label: 'Fix it on the branch, or re-run the migration',
+      detail: 'A re-run starts from the approved plan again. Fixing it by hand keeps '
+        + 'the work already done.',
+    },
+  ];
+
+  switch (check) {
+    case 'BUILD_SUCCESSFUL':
+      return [
+        {
+          label: 'The build does not compile',
+          detail: 'Nothing downstream can run until it does — the failing tests and the '
+            + 'missing sandbox are consequences, not separate problems. The build log '
+            + 'names the file and line.',
+        },
+        ...common,
+      ];
+    case 'REQUIRED_TESTS_PASSED':
+      return [
+        {
+          label: 'Tests that passed at baseline now fail',
+          detail: 'The migration changed behaviour the baseline recorded. Either the '
+            + 'change is wrong, or the test encoded something the migration was '
+            + 'allowed to change — the baseline contract says which.',
+        },
+        ...common,
+      ];
+    case 'PROHIBITED_CRYPTO_ABSENT':
+      return [
+        {
+          label: 'Classical cryptography remains in scope',
+          detail: 'An approved usage was not migrated. The verification names the '
+            + 'algorithm and where it still appears.',
+        },
+        ...common,
+      ];
+    case 'NO_CRITICAL_BLOCKER':
+      return [
+        {
+          label: 'A blocking gate is still open',
+          detail: 'Answer it on this screen. Until it is resolved the run cannot '
+            + 'proceed, whatever else passes.',
+        },
+      ];
+    default:
+      return common;
+  }
+}
+
+/** `BUILD_SUCCESSFUL` → `Build successful` */
+export const checkTitle = (check: string): string => {
+  const words = check.toLowerCase().replace(/_/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};

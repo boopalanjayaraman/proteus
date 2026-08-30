@@ -341,6 +341,37 @@ export function registerMigrationRoutes(
     return { configured: true, ...state };
   });
 
+  /**
+   * Runs the approved migration again.
+   *
+   * Deliberately not a re-approval: the human decision is already recorded, and
+   * sending someone back through discovery and assessment to change nothing
+   * would regenerate a plan they had already authorised.
+   */
+  app.post<{ Params: Params }>('/projects/:id/migration/retry', async (req, reply) => {
+    const project = await loadOwnedProject(repos, req, req.params.id);
+
+    const result = await run(() => approvals.retry(project, currentUser(req).uid));
+    startMigration?.(project.projectId, result.run.migrationRunId);
+
+    record(req, {
+      action: 'MIGRATION_RERUN',
+      summary: `Retried the migration of ${project.name} — same approved scope`,
+      target: result.run.branch.name,
+      projectId: project.projectId,
+      detail: {
+        migrationRunId: result.run.migrationRunId,
+        assessmentVersion: result.assessment.version,
+      },
+    });
+
+    return reply.status(202).send({
+      migrationRunId: result.run.migrationRunId,
+      approvedPlanItemIds: result.run.approval.approvedPlanItemIds,
+      status: 'RUNNING',
+    });
+  });
+
   app.post<{ Params: Params }>('/projects/:id/migration/approve', async (req, reply) => {
     const project = await loadOwnedProject(repos, req, req.params.id);
     const input = parse(req.body);

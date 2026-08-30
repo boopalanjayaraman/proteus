@@ -171,3 +171,14 @@
 .feed-time { font-size: 8px; color: var(--fg4); }
 .feed-text { font: 400 11.5px/1.5 var(--sans); text-wrap: pretty; }
 .feed-detail { font-size: 9.5px; line-height: 1.6; color: var(--fg3); word-break: break-word; }
+
+/* Discovery has stopped; the assessment is still being written. */
+.discovery-done.preparing {
+  border-color: color-mix(in srgb, var(--acc) 34%, transparent);
+  background: color-mix(in srgb, var(--acc) 7%, transparent);
+}
+.preparing-dot {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  margin-right: 8px; background: var(--acc);
+  animation: pulse 1.4s infinite;
+}

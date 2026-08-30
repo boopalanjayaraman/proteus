@@ -105,6 +105,22 @@ export class DiscoveryService {
       updatedAt: new Date(),
     } as never);
     run.progress = { filesTotal, filesAnalyzed, percent: stageProgress(run.stage) };
+
+    /**
+     * The count, as an event, because the screen has no other way to it.
+     *
+     * `FILE_ANALYZED` is emitted once per stage advance with a note, so a screen
+     * counting those events reports the number of stages, not the number of
+     * files — which is how "7 files analyzed" appeared for a 33-file repository.
+     * The number lives on the run's `progress`; this carries it to anything
+     * watching the feed.
+     */
+    await this.repos.events.emit(run.projectId, {
+      type: 'SOURCE_ANALYSIS_STARTED', phase: 'DISCOVERY', level: 'DETAIL', severity: 'INFO',
+      title: `Scanned ${filesAnalyzed} file${filesAnalyzed === 1 ? '' : 's'}`,
+      message: String(filesAnalyzed),
+      actor: 'TOOL', refs: {}, stage: run.stage,
+    }).catch(() => undefined);
   }
 
   /** Where a restarted worker picks up. */

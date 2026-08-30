@@ -124,6 +124,9 @@ export async function detect(
   const files = await wc.files();
   const candidates: Candidate[] = [];
 
+  /** Content already read, kept so cross-file resolution needs no second pass. */
+  const sources: Array<{ path: string; content: string }> = [];
+
   for (const file of files) {
     const applicable = rules.filter(
       (r) => r.appliesTo.length === 0 || r.appliesTo.includes(file.kind),
@@ -131,6 +134,7 @@ export async function detect(
     if (applicable.length === 0) continue;
 
     const content = await wc.read(file.path);
+    sources.push({ path: file.path, content });
     const lines = content.split('\n');
 
     for (const rule of applicable) {
@@ -212,7 +216,90 @@ export async function detect(
     }
   }
 
-  return { candidates, filesScanned: files.length };
+  return {
+    candidates: resolveKeyGenerationUsage(candidates, sources),
+    filesScanned: files.length,
+  };
+}
+
+/**
+ * Resolves what a generated key pair is *for*, by finding who consumes it.
+ *
+ * `EXEC-DISP-010` sends quantum-vulnerable cryptography with an undetermined
+ * usage to a human, and it is right to: an ambiguous usage is exactly where an
+ * autonomous substitution would be wrong. Its own rationale names the case it
+ * exists for — `KeyPairGenerator.getInstance("RSA")` **with no call site
+ * nearby**.
+ *
+ * But a call site in another file is still a call site. `PartnerKeyProvider`
+ * generates an RSA pair and exposes `acquirerPublicKey()`; two callers pass that
+ * straight into `Cipher.WRAP_MODE`. The usage is determined — the single-line
+ * scanner simply could not see across the file boundary, so the finding reached
+ * the assessment with `usage: undefined` and was excluded from the plan.
+ *
+ * That produced a plan that was internally valid and jointly impossible: the
+ * consumers were migrated to ML-KEM while their key supplier kept emitting RSA.
+ *
+ * This supplies the missing fact rather than relaxing the rule. Once `usage` is
+ * known, `EXEC-DISP-010` no longer applies and `EXEC-DISP-009` classifies it
+ * like any other determined usage.
+ */
+export function resolveKeyGenerationUsage(
+  candidates: Candidate[],
+  files: Array<{ path: string; content: string }>,
+): Candidate[] {
+  const undetermined = candidates.filter(
+    (c) => c.usage === 'UNKNOWN' && c.quantumVulnerable && /KeyPairGenerator/.test(c.matchedText),
+  );
+  if (undetermined.length === 0) return candidates;
+
+  // Where key transport actually happens, by file.
+  const transportFiles = new Set(
+    candidates
+      .filter((c) => c.usage === 'KEY_TRANSPORT' || c.usage === 'KEY_ESTABLISHMENT')
+      .map((c) => c.path),
+  );
+  if (transportFiles.size === 0) return candidates;
+
+  return candidates.map((c) => {
+    if (!undetermined.includes(c)) return c;
+
+    // Accessors this class exposes — the handles a caller would use.
+    const source = files.find((f) => f.path === c.path);
+    if (!source) return c;
+    const accessors = [...source.content.matchAll(/public\s+\w*PublicKey\s+(\w+)\s*\(/g)]
+      .map((m) => m[1]!)
+      .filter(Boolean);
+    if (accessors.length === 0) return c;
+
+    /*
+     * A file that calls the accessor AND names a class that performs key
+     * transport. Two hops, because the caller is rarely the transporter:
+     * `AcquirerClient` calls `acquirerPublicKey()` and hands the result to
+     * `CryptoService.wrapSessionKey`, and the wrap lives in CryptoService.
+     *
+     * Requiring the class name keeps this narrow. A file that merely calls the
+     * accessor and does nothing cryptographic with it resolves nothing, which
+     * is the behaviour EXEC-DISP-010 is protecting.
+     */
+    const transportClasses = [...transportFiles]
+      .map((f) => f.split('/').pop()?.replace(/\.\w+$/, '') ?? '')
+      .filter(Boolean);
+
+    const consumer = files.find(
+      (f) => f.path !== c.path
+        && accessors.some((a) => new RegExp(`\\.${a}\\s*\\(`).test(f.content))
+        && transportClasses.some((cls) => new RegExp(`\\b${cls}\\b`).test(f.content)),
+    );
+    if (!consumer) return c;
+
+    return {
+      ...c,
+      usage: 'KEY_TRANSPORT' as CryptoUsage,
+      note: `${(c.note ?? '').trim()} Key material consumed by key transport in `
+        + `${consumer.path}, so the usage is determined rather than ambiguous.`.trim(),
+    };
+  });
 }
 
 /**

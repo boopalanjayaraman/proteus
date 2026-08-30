@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { BehavioralInvariant, PlanItem, StructuredFailure } from '@proteus/schema';
 import type { ModelClient } from '../model';
 import { PatchInput, RepairInput } from '../tools/registry';
-import { MIGRATION_SYSTEM_INSTRUCTION } from '../prompts/migration';
+import { MIGRATION_SYSTEM_INSTRUCTION, ML_KEM_REFERENCE } from '../prompts/migration';
 
 /**
  * A3 — the Migration Engineer, in its patching role.
@@ -91,6 +91,99 @@ const VERSION_GATED_APIS: Array<{ language: string; minVersion: number; note: st
   },
 ];
 
+/**
+ * Where a library's API and its version are coupled, and getting it wrong
+ * produces a compile error the loop cannot reason its way out of.
+ *
+ * These are not general documentation. Each entry is a trap a real run fell
+ * into: the dependency upgrade and the imports are usually two different files,
+ * often two different plan items, and nothing checks that the version chosen
+ * actually contains the package that was imported.
+ */
+const LIBRARY_API_NOTES: Array<{ language: string; note: string }> = [
+  {
+    language: 'java',
+    note: ML_KEM_REFERENCE,
+  },
+  {
+    language: 'java',
+    note: 'Bouncy Castle ML-KEM, verified against the published jars. Use '
+      + 'bcprov-jdk18on 1.80 and these exact packages:\n'
+      + '    - JCA keys:  org.bouncycastle.jcajce.interfaces.MLKEMPublicKey / '
+      + 'MLKEMPrivateKey / MLKEMKey\n'
+      + '    - JCA specs: org.bouncycastle.jcajce.spec.MLKEMParameterSpec\n'
+      + '    - low level: org.bouncycastle.pqc.crypto.mlkem.MLKEMGenerator / '
+      + 'MLKEMExtractor / MLKEMParameters\n'
+      + '    ML-KEM is NOT under `pqc.jcajce` — that package holds Dilithium, Falcon, '
+      + 'BIKE and CMCE only, and has no MLKEM types in any version. The low-level '
+      + 'primitives are under `pqc.crypto.mlkem`, but the JCA layer is not.\n'
+      + '    Version gate: the mlkem packages exist only from 1.79. bcprov 1.78.1 has '
+      + 'none of them — its equivalents are `pqc.crypto.crystals.kyber` '
+      + '(KyberKEMGenerator, KyberParameters). Importing an mlkem package without '
+      + 'setting bcprov-jdk18on to >= 1.79 in the same change does not compile.',
+  },
+];
+
+/**
+ * The rule that stops an in-scope change breaking an out-of-scope file.
+ *
+ * A migration is given a small set of paths and may edit nothing else. If it
+ * changes the signature of a method that something outside those paths calls,
+ * the module stops compiling — and the caller cannot be fixed, because fixing it
+ * would breach the approved scope.
+ *
+ * That is not hypothetical. `CryptoUtils.wrapKey(SecretKey, PublicKey)` was
+ * replaced with a KEM-shaped API while `pay/legacy/LegacySettlementExporter`,
+ * outside the approved paths, still called the old one. The build failed on a
+ * file the agent was forbidden to touch, and no repair could reach it.
+ *
+ * ML-KEM makes this especially likely: a KEM *derives* a shared secret rather
+ * than wrapping a key you already hold, so the natural migration changes the
+ * shape of the method, not just its body.
+ */
+export const SCOPE_COMPATIBILITY: string[] = [
+  'SOURCE COMPATIBILITY — the rest of the repository must still compile:',
+  '  Files outside the approved paths are not yours to edit, and they are not',
+  '  rewritten for you. So any public method, constructor or field you change',
+  '  must remain callable exactly as it is called today by code you cannot see.',
+  '',
+  '  If the migration needs a different shape — and a KEM does, because it',
+  '  derives a secret rather than wrapping one you already hold — then ADD the',
+  '  new method and KEEP the old signature working. Do not repurpose or delete',
+  '  a public signature that callers outside your scope may depend on.',
+  '',
+  '  SIGNATURE, NOT ALGORITHM. Keeping a method callable does NOT mean keeping',
+  '  the old primitive reachable. A branch like',
+  '',
+  '      if ("RSA".equalsIgnoreCase(recipient.getAlgorithm())) { ...old RSA wrap... }',
+  '',
+  '  leaves quantum-vulnerable cryptography in an in-scope file, and',
+  '  PROHIBITED_CRYPTO_ABSENT fails the migration for exactly that. The whole',
+  '  point is that the classical path is gone. Same signature, one',
+  '  implementation, and it is the new one — no compatibility fallback, no',
+  '  algorithm switch on the key type.',
+  '',
+  '  If the old signature genuinely cannot keep working, say so in `refusal`',
+  '  rather than changing it. A build that does not compile helps nobody, and a',
+  '  refusal naming the caller is something a person can act on.',
+];
+
+/** Both constraint blocks, exported so their content can be asserted on. */
+export function migrationConstraints(
+  ctx: { language: string; languageVersion?: string },
+): string[] {
+  return [...runtimeConstraint(ctx), ...libraryNotes(ctx)];
+}
+
+function libraryNotes(ctx: { language: string }): string[] {
+  const notes = LIBRARY_API_NOTES.filter(
+    (n) => n.language === ctx.language.toLowerCase(),
+  );
+  if (notes.length === 0) return [];
+  return ['', 'LIBRARY CONSTRAINTS — version and API are coupled:',
+    ...notes.map((n) => `  ${n.note}`)];
+}
+
 function runtimeConstraint(ctx: { language: string; languageVersion?: string }): string[] {
   const major = Number.parseInt(ctx.languageVersion ?? '', 10);
   if (!Number.isFinite(major)) return [];
@@ -123,12 +216,17 @@ export class MigrationAgent {
         ctx.target ? `Approved target: ${ctx.target.parameterSet ?? ctx.target.target}` : '',
         `Stack: ${stackLine(ctx)}`,
         ...runtimeConstraint(ctx),
+        ...libraryNotes(ctx),
         '',
-        'The approved scope — verification compares your diff against this:',
+        'The approved scope — verification compares your diff against this.',
+        'These are the ONLY files you may edit. Every other file in the repository',
+        'stays exactly as it is, and must still compile against what you write:',
         ...ctx.planItem.expectedChanges.map(
           (c) => `  ${c.changeType}: ${c.paths.join(', ')} — ${c.description}`,
         ),
         ...ctx.planItem.conditions.map((c) => `  ONLY IF: ${c}`),
+        '',
+        ...SCOPE_COMPATIBILITY,
         '',
         'The baseline contract:',
         ...ctx.invariants.map(
@@ -165,9 +263,15 @@ export class MigrationAgent {
         'before you were asked. You cannot change the classification.',
         '',
         `Stack: ${stackLine(ctx)}`,
-        // The constraint belongs here more than anywhere: this is the prompt
-        // that ran four times against an API the runtime could never provide.
+        // These belong here more than anywhere: this is the prompt that runs
+        // after a compile error, and every trap so far produces exactly that.
         ...runtimeConstraint(ctx),
+        ...libraryNotes(ctx),
+        '',
+        // A "cannot find symbol" in a file you may not edit is this rule being
+        // broken upstream — the fix is to restore the signature, not to chase
+        // the caller.
+        ...SCOPE_COMPATIBILITY,
         '',
         `Classification: ${ctx.classification}`,
         `Assigned by: ${ctx.classificationRuleId}`,

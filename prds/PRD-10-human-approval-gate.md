@@ -200,6 +200,29 @@ Four backend and four frontend tests, including one that reproduces the exact st
 blob failure left behind — `ASSESSMENT_READY` with the gate deleted — and asserts the
 approval still succeeds and still records consent.
 
+**Amendment — 2026-08-30: retrying an approved migration**
+
+A failed run left two ways forward: fix the branch by hand, or start again from discovery.
+Starting again regenerates a plan the user already approved and supersedes the assessment
+their approval pinned — which invalidates the one human decision this increment exists to
+record.
+
+`POST /projects/:id/migration/retry` repeats the **execution** of that decision, not the
+decision. It abandons the stalled run, creates a new one from the same approved assessment
+and the same approved plan items, and carries `approvedBy` and `approvedAt` forward
+unchanged — the human decided once.
+
+- The previous run is marked `ABANDONED`, never overwritten: a run is the record of an
+  attempt, and a failed attempt is exactly what an evidence package needs to show.
+- Run ids gain an attempt suffix — `mig_PQC-0006_v1`, then `_r2` — so they stay unique
+  and readable.
+- Refused while a worker still holds the previous run, naming the holder.
+- **Requires `current.approvedAssessmentId`, with no fallback to `current.assessmentId`.**
+  A test caught the fallback: it would have let a retry execute a plan nobody authorised.
+
+Offered on the migration screen's blocker panel, which is where a person is already being
+told what went wrong.
+
 **Deferred** —
 
 - **The migration screen is still a placeholder.** Approval navigates to

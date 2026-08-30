@@ -1,7 +1,8 @@
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { RuleEngine } from '../src/core/rules/engine';
-import { detect, detectDependencies, detectionRules } from '../src/core/discovery/detect';
+import { detect, detectDependencies, detectionRules, resolveKeyGenerationUsage,
+} from '../src/core/discovery/detect';
 import { detectProfile } from '../src/core/discovery/profile';
 import { WorkingCopy, classify } from '../src/core/discovery/workingCopy';
 import { capabilityOf, loadRegistry, versionLt } from '../src/core/discovery/providers';
@@ -194,5 +195,75 @@ describe('rule wiring', () => {
       .toEqual({ owner: 'northwind-pay', repo: 'payments-api' });
     expect(link('src/main/java/pay/security/CryptoService.java', 44))
       .toBe(`https://github.com/northwind-pay/payments-api/blob/${COMMIT}/src/main/java/pay/security/CryptoService.java#L44`);
+  });
+});
+
+describe('key generation whose usage lives in another file', () => {
+  /**
+   * `PartnerKeyProvider` generates the RSA pair that `AcquirerClient` and
+   * `LegacySettlementExporter` pass straight into `Cipher.WRAP_MODE`. The
+   * single-line scanner could not see across the file boundary, so the finding
+   * reached the assessment with `usage: UNKNOWN`.
+   *
+   * `EXEC-DISP-010` then correctly sent it to a human — and correctly kept it
+   * out of any autonomous plan. The result was a plan that was internally valid
+   * and jointly impossible: the consumers migrated to ML-KEM while their key
+   * supplier kept emitting RSA, which is unrepairable from inside the approved
+   * files.
+   *
+   * The rule is right. The missing input was the usage.
+   */
+  it('resolves the usage from the consumer, so DISP-010 no longer applies', async () => {
+    const wc = new WorkingCopy(p('../../../fixtures/payments-api'));
+    const result = await detect(engine, wc, 'abc1234', () => undefined);
+
+    const keyGen = result.candidates.filter((c) => /KeyPairGenerator/.test(c.matchedText));
+    expect(keyGen.length).toBeGreaterThan(0);
+
+    const partner = keyGen.find((c) => c.path.includes('PartnerKeyProvider'));
+    expect(partner, 'PartnerKeyProvider generates the acquirer key pair').toBeDefined();
+    expect(partner?.usage).toBe('KEY_TRANSPORT');
+    expect(partner?.note).toContain('usage is determined');
+  });
+
+  it('leaves key generation with no transport consumer undetermined', () => {
+    // The case DISP-010 exists for. Resolving this one would be the
+    // autonomous substitution on an ambiguous usage that the rule forbids.
+    const candidates = [
+      {
+        ruleId: 'EXEC-DET-004', path: 'a/Gen.java', line: 1,
+        matchedText: 'KeyPairGenerator.getInstance("RSA")',
+        usage: 'UNKNOWN', strength: 'STRONG', severity: 'HIGH',
+        quantumVulnerable: true, dedupeKey: 'k', evidence: {},
+      },
+    ] as never as Parameters<typeof resolveKeyGenerationUsage>[0];
+
+    const out = resolveKeyGenerationUsage(candidates, [
+      { path: 'a/Gen.java', content: 'public PublicKey pub() { return kp.getPublic(); }' },
+    ]);
+    expect(out[0]?.usage).toBe('UNKNOWN');
+  });
+
+  it('does not resolve from the generating file itself', () => {
+    // A class that both generates and wraps needs no cross-file inference, and
+    // matching itself would resolve anything that mentions a key.
+    const candidates = [
+      {
+        ruleId: 'EXEC-DET-004', path: 'a/Both.java', line: 1,
+        matchedText: 'KeyPairGenerator.getInstance("RSA")',
+        usage: 'UNKNOWN', strength: 'STRONG', severity: 'HIGH',
+        quantumVulnerable: true, dedupeKey: 'k', evidence: {},
+      },
+      {
+        ruleId: 'EXEC-DET-001', path: 'a/Both.java', line: 9,
+        matchedText: 'Cipher.WRAP_MODE', usage: 'KEY_TRANSPORT', strength: 'STRONG',
+        severity: 'HIGH', quantumVulnerable: true, dedupeKey: 'k2', evidence: {},
+      },
+    ] as never as Parameters<typeof resolveKeyGenerationUsage>[0];
+
+    const out = resolveKeyGenerationUsage(candidates, [
+      { path: 'a/Both.java', content: 'public PublicKey pub() { } ... pub()' },
+    ]);
+    expect(out[0]?.usage).toBe('UNKNOWN');
   });
 });

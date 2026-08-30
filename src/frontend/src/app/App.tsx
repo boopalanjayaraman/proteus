@@ -33,6 +33,9 @@ const CRUMBS: Record<string, string> = {
  * in the shell — which renders `<Routes>` as a child and is therefore outside
  * every route that declares `:id`.
  */
+/** Often enough that a stage change is visible, rarely enough to be invisible. */
+const REFRESH_MS = 4000;
+
 function useRouteProject(pathname: string): Project | null {
   const id = projectIdFromPath(pathname);
   const { api, firebaseUser } = useAuth();
@@ -51,14 +54,38 @@ function useRouteProject(pathname: string): Project | null {
   useEffect(() => {
     if (!firebaseUser) { setProject(null); return; }
     if (!selectedId) return;
+
     let cancelled = false;
-    api.project(selectedId)
-      .then((p) => { if (!cancelled) setProject(p); })
-      // A project that has been deleted stops being the selection, rather than
-      // leaving the rail pointing at something no longer there.
-      .catch(() => { if (!cancelled) setProject(null); });
-    return () => { cancelled = true; };
-  }, [selectedId, firebaseUser, api]);
+    const load = () => {
+      api.project(selectedId)
+        .then((p) => { if (!cancelled) setProject(p); })
+        // A project that has been deleted stops being the selection, rather
+        // than leaving the rail pointing at something no longer there.
+        .catch(() => { if (!cancelled) setProject(null); });
+    };
+    load();
+
+    /**
+     * Kept fresh while the work is still moving.
+     *
+     * The rail reads `summary` to decide which screens are reachable, and it
+     * used to read whatever was true when the page loaded. A project opened at
+     * CREATED stayed CREATED in the rail through discovery, approval and the
+     * whole migration — so every screen the project had actually reached stayed
+     * disabled, and there was no way to go back and look at the evidence.
+     *
+     * A poll rather than a second event stream: the screens already hold one
+     * each, and opening another from the shell would double every connection to
+     * keep one card and four nav items current.
+     */
+    const settled = project?.stage === 'COMPLETED' || project?.lifecycle !== 'ACTIVE';
+    if (settled) return () => { cancelled = true; };
+
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') load();
+    }, REFRESH_MS);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [selectedId, firebaseUser, api, project?.stage, project?.lifecycle]);
 
   return project;
 }

@@ -235,6 +235,18 @@ export class ApiClient {
       method: 'POST', body: JSON.stringify(body),
     });
 
+  /**
+   * Runs the approved migration again, from the same scope.
+   *
+   * Not a re-approval — discovery and assessment are not repeated, and the
+   * original authorisation is carried forward.
+   */
+  retryMigration = (projectId: string) =>
+    this.request<{ migrationRunId: string; approvedPlanItemIds: string[]; status: string }>(
+      `/projects/${projectId}/migration/retry`,
+      { method: 'POST', body: '{}' },
+    );
+
   /** Every gate this project has raised. The approval is the first of them. */
   gates = (projectId: string) =>
     this.request<{ count: number; open: number; gates: HumanGate[] }>(

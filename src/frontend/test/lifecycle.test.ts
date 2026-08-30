@@ -313,3 +313,61 @@ describe('canStop', () => {
     expect(canStop(p({ migrationComplete: true })).enabled).toBe(false);
   });
 });
+
+describe('every step a project has completed stays reachable', () => {
+  /**
+   * The rail showed `CREATED` while the database said `MIGRATING`.
+   *
+   * `useRouteProject` fetched the project once and never again, so
+   * `screenAvailability` judged flags that were true when the page loaded. A
+   * project opened at CREATED stayed CREATED in the rail through discovery,
+   * approval and the whole migration — every screen it had actually reached
+   * stayed disabled, with no way back to the evidence.
+   *
+   * The rule was right; its input was stale. These pin the rule so a future
+   * change to it has to be deliberate.
+   */
+  const at = (over: Partial<Project['summary']>, stage: string) => ({
+    stage,
+    summary: {
+      discoveryComplete: false, assessmentComplete: false, migrationApproved: false,
+      migrationComplete: false, verificationComplete: false, sandboxDeployed: false,
+      ...over,
+    },
+  } as unknown as Pick<Project, 'stage' | 'summary'>);
+
+  const enabled = (p: Pick<Project, 'stage' | 'summary'>) =>
+    (['discovery', 'assessment', 'migration', 'sandbox'] as const)
+      .filter((s) => screenAvailability(p, s).enabled);
+
+  it('opens discovery while discovery is still running', () => {
+    expect(enabled(at({}, 'ANALYZING'))).toEqual(['discovery']);
+  });
+
+  it('opens the assessment as soon as discovery finishes', () => {
+    expect(enabled(at({ discoveryComplete: true }, 'ASSESSMENT_READY')))
+      .toEqual(['discovery', 'assessment']);
+  });
+
+  it('keeps discovery and the assessment open all through the migration', () => {
+    // The exact state of PQC-0011 while the rail was showing CREATED.
+    expect(enabled(at(
+      { discoveryComplete: true, assessmentComplete: true, migrationApproved: true },
+      'MIGRATING',
+    ))).toEqual(['discovery', 'assessment', 'migration']);
+  });
+
+  it('opens everything once the migration completes', () => {
+    expect(enabled(at({
+      discoveryComplete: true, assessmentComplete: true, migrationApproved: true,
+      migrationComplete: true,
+    }, 'COMPLETED'))).toEqual(['discovery', 'assessment', 'migration', 'sandbox']);
+  });
+
+  it('keeps them open on a failed project — that is when evidence matters most', () => {
+    expect(enabled(at(
+      { discoveryComplete: true, assessmentComplete: true, migrationApproved: true },
+      'NEEDS_HUMAN_ACTION',
+    ))).toEqual(['discovery', 'assessment', 'migration']);
+  });
+});

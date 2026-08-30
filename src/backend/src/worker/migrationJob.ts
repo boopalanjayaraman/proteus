@@ -241,7 +241,13 @@ export async function runTestEngineering(
         ...(artifact.testIntegrity ? { testIntegrity: artifact.testIntegrity } : {}),
       };
 
-      const verdict = guardTestArtifact(proposal, { invariants });
+      // The approved paths are known before any test is written, so a
+      // characterization test that pins one of them can be refused rather than
+      // discovered later as a self-inflicted failure (EXEC-TEST-008).
+      const verdict = guardTestArtifact(proposal, {
+        invariants,
+        approvedPaths: migrationContext.targetPaths,
+      });
       if (!verdict.allowed) {
         refused.push({ path: artifact.path, refusals: verdict.refusals });
         for (const r of verdict.refusals) log.warn({ path: artifact.path, ruleId: r.ruleId }, r.reason);

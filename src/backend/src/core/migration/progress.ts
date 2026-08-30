@@ -295,7 +295,11 @@ export class ProgressTracker {
         const suite = this.bySuite.get(event.suite)
           ?? { suite: event.suite, group: 'NEW_EVIDENCE' as ProgressGroup,
                state: 'RUNNING' as const, failed: [] };
-        suite.failed.push({ method: event.method });
+        // Deduped by name: a suite is re-run after every repair, so the same
+        // method fails once per attempt and the list would grow with each.
+        if (!suite.failed.some((f) => f.method === event.method)) {
+          suite.failed.push({ method: event.method });
+        }
         this.bySuite.set(event.suite, suite);
         this.lastFailure = { suite: event.suite, method: event.method };
         break;

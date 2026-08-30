@@ -185,7 +185,13 @@ export interface HandoffState {
 export const NO_HANDOFF: HandoffState = { sawRunning: false };
 
 /**
- * Whether discovery finishing should carry the user to the assessment.
+ * Whether the work is finished enough to carry the user to the assessment.
+ *
+ * `done` must mean **the assessment exists**, not merely that discovery
+ * finished. Discovery completing starts the assessment; it does not produce
+ * one. Navigating on `discoveryComplete` lands on a screen that says "no
+ * assessment has been generated yet" and then needs a refresh — which is
+ * exactly what it did.
  *
  * Only on the transition from running to finished, never on arrival: a project
  * that finished days ago is `done` from the first render, and navigating on that

@@ -105,7 +105,18 @@ export function Discovery() {
   );
 
   const findings = project?.summary.counts.findings ?? 0;
-  const filesAnalyzed = events.filter((e) => e.type === 'FILE_ANALYZED').length;
+  /**
+   * The scan's own count, not a tally of events.
+   *
+   * `FILE_ANALYZED` is emitted once per stage advance, so counting those
+   * reported the number of stages — seven — for a repository with thirty-three
+   * source files.
+   */
+  const filesAnalyzed = events
+    .filter((e) => e.type === 'SOURCE_ANALYSIS_STARTED' && e.message)
+    .map((e) => Number(e.message))
+    .filter((n) => Number.isFinite(n))
+    .at(-1) ?? 0;
   const blockers = events.filter((e) => e.severity === 'WARN' || e.severity === 'ERROR').length;
   const percent = project?.stage === 'CREATED'
     ? 0
@@ -113,6 +124,15 @@ export function Discovery() {
     ? 100
     : Math.min(96, Math.round((nodes.length / Math.max(12, nodes.length + 4)) * 100));
   const done = Boolean(project?.summary.discoveryComplete);
+  /**
+   * The assessment exists — not merely that discovery stopped.
+   *
+   * Discovery completing *starts* the assessment. Handing over on
+   * `discoveryComplete` landed on a screen with nothing on it yet.
+   */
+  const assessmentReady = Boolean(
+    project?.summary.assessmentComplete || project?.current.assessmentId,
+  );
 
   /**
    * Hands the user to the assessment the moment discovery finishes.
@@ -123,10 +143,12 @@ export function Discovery() {
    */
   const handoffState = useRef(NO_HANDOFF);
   useEffect(() => {
-    const result = handoff(handoffState.current, { loaded: Boolean(project), done });
+    const result = handoff(handoffState.current, {
+      loaded: Boolean(project), done: assessmentReady,
+    });
     handoffState.current = result.state;
     if (result.navigate && id) navigate(`/projects/${id}/assessment`);
-  }, [project, done, id, navigate]);
+  }, [project, assessmentReady, id, navigate]);
 
   const stats = [
     { value: filesAnalyzed, label: 'FILES ANALYZED', fg: 'var(--fg)' },
@@ -231,7 +253,24 @@ export function Discovery() {
               />
             )}
 
-            {done && (
+            {/* Discovery has stopped but the assessment is still being written.
+                Saying so is the difference between "working" and "broken". */}
+            {done && !assessmentReady && (
+              <div className="discovery-done preparing">
+                <div>
+                  <div className="discovery-done-title">
+                    <span className="preparing-dot" aria-hidden="true" />
+                    Discovery complete — preparing the assessment
+                  </div>
+                  <div className="mono discovery-done-sub">
+                    {nodes.length} GRAPH NODES · {edges.length} RELATIONSHIPS · {findings} FINDINGS
+                    {' · '}READING THE RULES AND COMPOSING THE PLAN
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {assessmentReady && (
               <div className="discovery-done">
                 <div>
                   <div className="discovery-done-title">

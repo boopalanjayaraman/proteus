@@ -197,6 +197,30 @@ most Java codebases use for void and spy stubbing, the guard would have let thro
 most likely way of faking the primitive. Caught by a test that enumerated four stub
 shapes rather than one.
 
+**Amendment — 2026-08-30: EXEC-TEST-008, a characterization test may not pin what the plan changes**
+
+The agent wrote `PomDependencyCharacterizationTest`, asserting `bcprov-jdk18on` was still
+at its pre-migration version. It passed against the base commit — which is exactly what a
+characterization test is asked to do — and then failed the moment its own approved
+dependency upgrade landed. Diagnosed as `TEST_FIXTURE_OUTDATED` and repaired out of the
+same budget the loop needs for real failures: a tripwire the agent set for itself.
+
+The instruction was half of the rule. It said a characterization test "must pass against
+the code as it stands today" and never said it must also survive the migration.
+
+Two changes, because the prompt alone would leave this to the model remembering:
+
+- **The instruction** now says a characterization test pins behaviour the migration must
+  *preserve*, and to check each assertion against the approved plan before writing it.
+- **`EXEC-TEST-008`** refuses a `CHARACTERIZATION` artifact whose content names a file the
+  approved plan will change. The approved paths are known before any test is written, so
+  this is checkable rather than discoverable-after-the-fact.
+
+Deliberately narrow: it matches a literal reference to a changed file, not the exercising
+of a migrated class — which is expected and is the point of a characterization test.
+Inert when the approved paths are unknown, so a caller that has not been updated does not
+start refusing every test.
+
 **Deferred** —
 
 - **The build/test/repair loop.** PRD-12. `runTestEngineering` stops at

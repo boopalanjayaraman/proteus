@@ -58,8 +58,8 @@ const LEASE_TTL_MS = 60_000;
 /** `PQC-0184` → `agent/pqc/PQC-0184`, matching the branch the UX shows. */
 export const branchNameFor = (projectId: string): string => `agent/pqc/${projectId}`;
 
-const migrationRunId = (projectId: string, version: number): string =>
-  `mig_${projectId}_v${version}`;
+const migrationRunId = (projectId: string, version: number, attempt = 1): string =>
+  attempt <= 1 ? `mig_${projectId}_v${version}` : `mig_${projectId}_v${version}_r${attempt}`;
 
 const approvalGateId = (projectId: string, version: number): string =>
   `gate_${projectId}_approval_v${version}`;
@@ -321,6 +321,135 @@ export class ApprovalService {
       } as never,
     });
     return { ...existing, status: 'RESOLVED', resolution: { optionId: APPROVE_OPTION_ID, resolvedBy, resolvedAt: now } };
+  }
+
+  /**
+   * Runs the approved migration again, from the same authorised scope.
+   *
+   * Not a second approval. The human decision already happened and is recorded
+   * on the assessment and its gate; this repeats the *execution* of that
+   * decision, which is what a failed run needs — going back through discovery
+   * and assessment to change nothing would regenerate a plan the user already
+   * approved and invalidate the approval they gave.
+   *
+   * The previous run is marked ABANDONED rather than replaced. A run is the
+   * record of an attempt, and an attempt that failed is exactly the thing an
+   * evidence package needs to be able to show.
+   */
+  async retry(project: Project, requestedBy: string): Promise<ApprovalResult> {
+    const { projectId } = project;
+
+    /**
+     * The APPROVED assessment, with no fallback to the current one.
+     *
+     * Falling back to `current.assessmentId` would let a retry execute a plan
+     * nobody ever authorised — the one thing this product exists not to do.
+     * A project with an assessment and no approval has nothing to retry; it has
+     * something to approve, which is a different screen and a different act.
+     */
+    const assessmentId = project.current.approvedAssessmentId;
+    const assessment = assessmentId
+      ? await this.repos.assessments.findOne({ projectId, assessmentId } as never)
+      : null;
+    if (!assessment) {
+      throw new ApprovalError(
+        'WRONG_STAGE',
+        'This project has no approved migration to retry. Approve the assessment first.',
+      );
+    }
+
+    const previous = (await this.repos.migrationRuns.collection
+      .find({ projectId } as never).sort({ startedAt: -1 }).toArray()) as unknown as MigrationRun[];
+
+    const live = previous.find((r) => r.status === 'RUNNING' || r.status === 'PAUSED_FOR_HUMAN');
+    if (live) {
+      const holder = await this.repos.migrationLease.currentHolder(live.migrationRunId);
+      if (holder) {
+        throw new ApprovalError(
+          'WRONG_STAGE',
+          `${holder} is still working on this migration. Stop it before retrying.`,
+        );
+      }
+    }
+
+    const now = new Date();
+    for (const r of previous) {
+      if (r.status === 'RUNNING' || r.status === 'PAUSED_FOR_HUMAN') {
+        await this.repos.migrationRuns.collection.updateOne(
+          { migrationRunId: r.migrationRunId } as never,
+          {
+            $set: {
+              status: 'ABANDONED', completedAt: now, updatedAt: now,
+              lease: { holder: 'superseded', expiresAt: now },
+            } as never,
+          },
+        );
+      }
+    }
+
+    // The attempt number is the count of runs already made, so ids stay unique
+    // and readable: mig_PQC-0006_v1, then _r2, _r3.
+    const attempt = previous.length + 1;
+    const runId = migrationRunId(projectId, assessment.version, attempt);
+    const approvedPlanItemIds = assessment.planItems
+      .filter((p) => p.approved !== false && AUTONOMOUS_PLAN_MODES.includes(p.mode as never))
+      .map((p) => p.planItemId);
+
+    const holder = `worker-${Math.random().toString(36).slice(2, 10)}`;
+    const run: MigrationRun = {
+      _schemaVersion: 1, createdAt: now, updatedAt: now,
+      migrationRunId: runId, projectId,
+      approval: {
+        assessmentId: assessment.assessmentId,
+        assessmentVersion: assessment.version,
+        approvedPlanItemIds,
+        // Carried from the original decision, not re-attributed: this is the
+        // same authorisation being executed again.
+        approvedBy: previous.at(-1)?.approval.approvedBy ?? requestedBy,
+        approvedAt: previous.at(-1)?.approval.approvedAt ?? now,
+        acknowledgedActions: previous.at(-1)?.approval.acknowledgedActions ?? [],
+      },
+      branch: {
+        name: branchNameFor(projectId),
+        baseCommitSha: project.repository.baseCommitSha ?? '0'.repeat(40),
+        pushed: false,
+        commitCount: 0,
+      },
+      stage: 'PREPARING_MIGRATION',
+      stageEnteredAt: now,
+      status: 'RUNNING',
+      attemptCount: 0,
+      metrics: {
+        testsPassing: 0, testsFailing: 0, autonomousRepairs: 0,
+        humanGatesOpened: 0, cloudBuildAttempts: 0,
+      },
+      checkpoint: { stage: 'PREPARING_MIGRATION', at: now },
+      lease: { holder, expiresAt: new Date(now.getTime() + LEASE_TTL_MS) },
+      startedAt: now,
+    };
+    await this.repos.migrationRuns.insert(run);
+
+    await this.repos.projects.collection.updateOne({ projectId } as never, {
+      $set: {
+        stage: 'MIGRATING', stageDetail: 'PREPARING_MIGRATION', stageEnteredAt: now,
+        actionRequired: false, updatedAt: now,
+        'current.migrationRunId': runId,
+        'summary.lastActivityAt': now,
+        'summary.lastActivityText': `Retrying the migration — attempt ${attempt}`,
+      } as never,
+      $inc: { version: 1 } as never,
+    });
+
+    await this.repos.events.emit(projectId, {
+      type: 'MIGRATION_APPROVED', phase: 'MIGRATION', level: 'MILESTONE', severity: 'INFO',
+      title: `Migration retried — attempt ${attempt}`,
+      message: `Same approved scope: ${approvedPlanItemIds.length} plan item`
+        + `${approvedPlanItemIds.length === 1 ? '' : 's'} from assessment v${assessment.version}. `
+        + 'Discovery and assessment are not repeated.',
+      actor: 'USER', refs: { assessmentId: assessment.assessmentId },
+    });
+
+    return { run, gate: null, assessment, created: true };
   }
 
   /**

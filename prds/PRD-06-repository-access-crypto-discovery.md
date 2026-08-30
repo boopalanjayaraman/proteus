@@ -123,6 +123,36 @@ findings are reproducible run to run.
 | 2026-08-29 | `core/discovery/providers.ts`, `engine/data/provider-capability.json` | Capability from a registry, not a version comparison |
 | 2026-08-29 | **`resolvesTo` added to three detection rules** | See below |
 
+**Amendment — 2026-08-30: key generation whose usage lives in another file**
+
+`PartnerKeyProvider` generates the RSA pair that `AcquirerClient` and
+`LegacySettlementExporter` hand to key transport. The single-line scanner cannot see
+across a file boundary, so the finding reached the assessment with `usage: UNKNOWN`.
+
+`EXEC-DISP-010` then classified it `NEEDS_FURTHER_INVESTIGATION`, whose only permitted
+mode is `NO_AUTONOMOUS_CHANGE` — correctly, by its own terms. The consequence was a plan
+that was **internally valid and jointly impossible**: every item within its permitted
+disposition, and the whole incapable of succeeding, because the consumers were migrated to
+ML-KEM while their key supplier kept emitting RSA. No repair inside the approved files can
+fix that; the key type is decided outside them.
+
+The rule is right and is unchanged. What was missing was the fact it depends on.
+
+`resolveKeyGenerationUsage` runs after the scan and resolves an undetermined asymmetric
+key generation to `KEY_TRANSPORT` when a file both calls one of the generating class's
+public-key accessors **and** names a class that performs key transport. Two hops, because
+the caller is rarely the transporter. Once `usage` is known, `EXEC-DISP-010` no longer
+applies and `EXEC-DISP-009` classifies it like any other determined usage.
+
+Deliberately narrow. A file that calls the accessor and does nothing cryptographic with it
+resolves nothing, and a class that both generates and wraps is left alone — it needs no
+cross-file inference. Both are covered by tests, because widening this would re-introduce
+exactly the autonomous substitution on an ambiguous usage that `EXEC-DISP-010` forbids.
+
+Verified against the fixture: the migration this unblocks was written by hand and built in
+`maven:3.9-eclipse-temurin-17` — 34 unit tests pass, and the only failures are the two
+`PartnerHandshakeIntegrationTest` cases the fixture rigs for the repair loop.
+
 **Deviations from plan**
 
 - **The detection rules did not match real code, and the fixture caught it.**

@@ -798,3 +798,58 @@ describe('the branch reaches the repository', () => {
     )).resolves.toBeUndefined();
   });
 });
+
+describe('EXEC-TEST-008 — a characterization test may not pin what the plan changes', () => {
+  /**
+   * The agent wrote `PomDependencyCharacterizationTest`, asserting
+   * `bcprov-jdk18on` was still at 1.72. It passed against the base commit —
+   * which is exactly what a characterization test is asked to do — and then
+   * failed the moment its own approved dependency upgrade landed.
+   *
+   * Diagnosed as TEST_FIXTURE_OUTDATED and repaired out of the same budget the
+   * loop needs for real failures. A tripwire the agent set for itself.
+   */
+  const artifact = (over: Partial<Parameters<typeof guardTestArtifact>[0]> = {}) => ({
+    path: 'src/test/java/pay/config/PomDependencyCharacterizationTest.java',
+    changeType: 'TEST' as const,
+    testKind: 'CHARACTERIZATION' as const,
+    content: 'assertTrue(readFile("pom.xml").contains("<version>1.72</version>"));',
+    ...over,
+  });
+
+  const approvedPaths = ['pom.xml', 'src/main/java/pay/util/CryptoUtils.java'];
+
+  it('refuses a characterization test that reads a file the plan rewrites', () => {
+    const verdict = guardTestArtifact(artifact(), { approvedPaths });
+    expect(verdict.allowed).toBe(false);
+    if (verdict.allowed) return;
+    expect(verdict.refusals[0]?.ruleId).toBe('EXEC-TEST-008');
+    expect(verdict.refusals[0]?.reason).toContain('pom.xml');
+  });
+
+  /** Whether THIS rule refused, ignoring the other guards' own verdicts. */
+  const refusedByRule = (v: ReturnType<typeof guardTestArtifact>) =>
+    !v.allowed && v.refusals.some((r) => r.ruleId === 'EXEC-TEST-008');
+
+  it('allows one that characterises behaviour instead of state', () => {
+    // The distinction that matters: exercising a migrated class is expected;
+    // reading the file being rewritten is pinning the change itself.
+    expect(refusedByRule(guardTestArtifact(
+      artifact({ content: 'assertEquals(envelope, service.settle(request).envelope());' }),
+      { approvedPaths },
+    ))).toBe(false);
+  });
+
+  it('does not constrain an acceptance test, which is meant to fail at base', () => {
+    expect(refusedByRule(guardTestArtifact(
+      artifact({ testKind: 'MIGRATION_ACCEPTANCE_TEST' }),
+      { approvedPaths },
+    ))).toBe(false);
+  });
+
+  it('is inert when the approved paths are unknown', () => {
+    // Refusing on an absent input would block every test in a caller that has
+    // not been updated to pass the scope.
+    expect(refusedByRule(guardTestArtifact(artifact()))).toBe(false);
+  });
+});

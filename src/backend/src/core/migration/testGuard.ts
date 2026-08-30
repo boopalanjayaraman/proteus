@@ -24,7 +24,7 @@ import type { BehavioralInvariant, ChangeType, TestIntegrityRecord } from '@prot
 
 export type GuardRuleId =
   | 'EXEC-MOCK-004' | 'EXEC-MOCK-001' | 'EXEC-TEST-001'
-  | 'EXEC-TEST-002' | 'EXEC-TEST-004' | 'EXEC-TEST-007';
+  | 'EXEC-TEST-002' | 'EXEC-TEST-004' | 'EXEC-TEST-007' | 'EXEC-TEST-008';
 
 export interface GuardRefusal {
   ruleId: GuardRuleId;
@@ -126,10 +126,50 @@ const LENGTH_QUALIFIED = /\b(wrong|invalid|bad|short|long|truncat|malformed)[a-z
 
 export function guardTestArtifact(
   artifact: ProposedTestArtifact,
-  context: { invariants?: BehavioralInvariant[] } = {},
+  context: {
+    invariants?: BehavioralInvariant[];
+    /** Paths the approved plan will change. A characterization test must not pin them. */
+    approvedPaths?: string[];
+  } = {},
 ): GuardVerdict {
   const refusals: GuardRefusal[] = [];
   const applied: GuardRuleId[] = [];
+
+  /*
+   * EXEC-TEST-008 — a characterization test may not pin what the plan changes.
+   *
+   * The agent wrote `PomDependencyCharacterizationTest`, asserting
+   * `bcprov-jdk18on` was at its pre-migration version. It passed against the
+   * base commit, which is what a characterization test is asked to do, and then
+   * failed the moment the approved dependency upgrade landed — a tripwire the
+   * agent set for itself, diagnosed as TEST_FIXTURE_OUTDATED and repaired out of
+   * its own budget.
+   *
+   * A characterization test captures what the migration must PRESERVE. Asserting
+   * the current state of a file the plan is about to rewrite is the opposite of
+   * that, and it is checkable: the approved paths are known before any test is
+   * written.
+   */
+  if (artifact.testKind === 'CHARACTERIZATION' && context.approvedPaths?.length) {
+    applied.push('EXEC-TEST-008');
+    const pinned = context.approvedPaths.filter((path) => {
+      const name = path.split('/').pop();
+      // Only a literal reference counts. A test that happens to exercise a
+      // migrated class is expected; one that reads the file being rewritten is
+      // pinning the change itself.
+      return Boolean(name) && artifact.content.includes(name!);
+    });
+
+    if (pinned.length > 0) {
+      refusals.push({
+        ruleId: 'EXEC-TEST-008',
+        classification: 'PROHIBITED_TEST_CONSTRUCTION',
+        reason: `a characterization test must survive the migration, and this one reads `
+          + `${pinned.join(', ')} — a file the approved plan changes. Characterize what the `
+          + 'migration must keep true, not the state it is about to leave.',
+      });
+    }
+  }
 
   // EXEC-MOCK-004 — the subject of the test may never be faked.
   applied.push('EXEC-MOCK-004');

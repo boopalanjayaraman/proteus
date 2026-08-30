@@ -65,3 +65,62 @@ Write code the repository's own authors would recognise as theirs. Match the sur
 idiom, the import style, the error handling. A migration that is obviously machine-written
 is harder to review, and this diff will be reviewed.
 `.trim();
+
+
+/**
+ * A compiled, executed ML-KEM key-transport implementation.
+ *
+ * Not a description of the API — the actual code, run on
+ * `maven:3.9-eclipse-temurin-17` with bcprov-jdk18on 1.80, which printed
+ * matching shared secrets (32-byte secret, 1088-byte encapsulation).
+ *
+ * It exists because describing this API did not work. Three runs each invented
+ * a different wrong package: `pqc.crypto.mlkem` against a version that predates
+ * it, `pqc.jcajce.interfaces.MLKEM*` which exists in no version, and
+ * `javax.crypto.KEM` which needs Java 21. The imports below are the ones that
+ * compile, and they are not guessable — `SecretKeyWithEncapsulation` is under
+ * `org.bouncycastle.jcajce`, its specs are under `org.bouncycastle.jcajce.spec`,
+ * and neither is under `pqc`.
+ *
+ * Adapt it to the code being migrated; do not copy it verbatim into an
+ * unrelated class.
+ */
+export const ML_KEM_REFERENCE = `
+VERIFIED ML-KEM-768 KEY TRANSPORT — Java 17, bcprov-jdk18on 1.80.
+This exact code was compiled and executed successfully. Use these imports.
+
+    import org.bouncycastle.jce.provider.BouncyCastleProvider;
+    import org.bouncycastle.jcajce.SecretKeyWithEncapsulation;
+    import org.bouncycastle.jcajce.spec.KEMGenerateSpec;
+    import org.bouncycastle.jcajce.spec.KEMExtractSpec;
+    import org.bouncycastle.jcajce.spec.MLKEMParameterSpec;
+
+    Security.addProvider(new BouncyCastleProvider());
+
+    // Key pair — the recipient's, published to the peer.
+    KeyPairGenerator kpg = KeyPairGenerator.getInstance("ML-KEM", "BC");
+    kpg.initialize(MLKEMParameterSpec.ml_kem_768, new SecureRandom());
+    KeyPair kp = kpg.generateKeyPair();
+
+    // Sender: one call yields both the session key and the encapsulation to
+    // transmit. There is no "encrypt this key" step — that is the difference
+    // between a KEM and RSA key transport.
+    KeyGenerator gen = KeyGenerator.getInstance("ML-KEM", "BC");
+    gen.init(new KEMGenerateSpec(kp.getPublic(), "AES"), new SecureRandom());
+    SecretKeyWithEncapsulation sent = (SecretKeyWithEncapsulation) gen.generateKey();
+    byte[] toSend = sent.getEncapsulation();   // 1088 bytes for ml_kem_768
+    SecretKey sessionKey = sent;               // 32 bytes, usable as AES
+
+    // Receiver: recovers the identical secret from the encapsulation.
+    KeyGenerator ext = KeyGenerator.getInstance("ML-KEM", "BC");
+    ext.init(new KEMExtractSpec(kp.getPrivate(), toSend, "AES"));
+    SecretKey received = ext.generateKey();
+
+Notes that cost three runs:
+  - \`SecretKeyWithEncapsulation\` is \`org.bouncycastle.jcajce\`, NOT \`javax.crypto\`.
+  - The specs are \`org.bouncycastle.jcajce.spec\`, NOT \`pqc.jcajce.spec\`.
+  - \`org.bouncycastle.pqc.jcajce.interfaces.MLKEM*\` does not exist in any
+    version — that package holds Dilithium, Falcon, BIKE and CMCE.
+  - \`javax.crypto.KEM\` needs Java 21 and will not resolve on 17.
+  - bcprov-jdk18on must be >= 1.79; set it in the same change as the imports.
+`;

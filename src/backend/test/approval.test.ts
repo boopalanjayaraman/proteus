@@ -530,3 +530,90 @@ describe('approval is available from either stage that means "waiting on you"', 
     expect(res.status).toBe(409);
   });
 });
+
+describe('retrying the approved migration', () => {
+  /**
+   * A failed run left only two ways forward: fix the branch by hand, or start
+   * over from discovery. Starting over regenerates a plan the user already
+   * approved and invalidates the approval they gave, which is the wrong shape
+   * for a product whose claim is one human decision.
+   *
+   * A retry repeats the *execution* of that decision, not the decision.
+   */
+  async function approvedThenFailed() {
+    const { project, assessment } = await atTheGate();
+    await fetch(`${s.url}/projects/${project.projectId}/migration/approve`, {
+      method: 'POST',
+      headers: { ...authFor(OWNER), 'content-type': 'application/json' },
+      body: JSON.stringify(approvalBody(assessment)),
+    });
+    // The state a failed verification leaves behind.
+    await t.repos.migrationRuns.collection.updateOne(
+      { projectId: project.projectId } as never,
+      { $set: { status: 'PAUSED_FOR_HUMAN', lease: { holder: 'dead', expiresAt: new Date(Date.now() - 1000) } } as never },
+    );
+    return { project, assessment };
+  }
+
+  const retry = (projectId: string) =>
+    fetch(`${s.url}/projects/${projectId}/migration/retry`, {
+      method: 'POST',
+      headers: { ...authFor(OWNER), 'content-type': 'application/json' },
+      body: '{}',
+    });
+
+  it('starts a new run without a second approval', async () => {
+    const { project, assessment } = await approvedThenFailed();
+
+    const res = await retry(project.projectId);
+    expect(res.status).toBe(202);
+    const body = await res.json() as { migrationRunId: string; approvedPlanItemIds: string[] };
+
+    // A distinct run — the failed one is the record of an attempt and is kept.
+    expect(body.migrationRunId).not.toBe(`mig_${project.projectId}_v${assessment.version}`);
+    expect(body.approvedPlanItemIds.length).toBeGreaterThan(0);
+
+    const runs = await t.repos.migrationRuns.find({ projectId: project.projectId } as never);
+    expect(runs).toHaveLength(2);
+    expect(runs.filter((r) => r.status === 'ABANDONED')).toHaveLength(1);
+  });
+
+  it('carries the original approval forward rather than re-attributing it', async () => {
+    const { project } = await approvedThenFailed();
+    await retry(project.projectId);
+
+    const runs = await t.repos.migrationRuns.collection
+      .find({ projectId: project.projectId } as never).sort({ startedAt: 1 }).toArray() as never as
+      Array<{ approval: { approvedBy: string; approvedAt: Date } }>;
+    // The human decided once. The retry executes that decision again.
+    expect(runs[1]?.approval.approvedBy).toBe(runs[0]?.approval.approvedBy);
+    expect(runs[1]?.approval.approvedAt).toEqual(runs[0]?.approval.approvedAt);
+  });
+
+  it('puts the project back to MIGRATING and clears the action flag', async () => {
+    const { project } = await approvedThenFailed();
+    await retry(project.projectId);
+
+    const after = await t.repos.projects.byId(project.projectId);
+    expect(after?.stage).toBe('MIGRATING');
+    expect(after?.actionRequired).toBe(false);
+  });
+
+  it('refuses while a worker still holds the previous run', async () => {
+    const { project } = await approvedThenFailed();
+    await t.repos.migrationRuns.collection.updateOne(
+      { projectId: project.projectId } as never,
+      { $set: { status: 'RUNNING', lease: { holder: 'worker-live', expiresAt: new Date(Date.now() + 600_000) } } as never },
+    );
+
+    const res = await retry(project.projectId);
+    expect(res.status).toBe(409);
+    expect(await res.text()).toContain('worker-live');
+  });
+
+  it('refuses a project that was never approved', async () => {
+    const { project } = await atTheGate();
+    const res = await retry(project.projectId);
+    expect(res.status).toBe(409);
+  });
+});

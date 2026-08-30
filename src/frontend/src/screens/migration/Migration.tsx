@@ -3,12 +3,13 @@ import type {
   VerificationResult,
 } from '@proteus/schema';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { ActivityFeed } from '../../components/activity/ActivityFeed';
 import { useAuth } from '../../app/AuthContext';
 import { useProjectStream } from '../../hooks/useProjectStream';
 import {
-  CLASSIFICATION_COLOR, DISPOSITION_COLOR, STATUS_COLOR, branchMeta, checkRows,
+  CLASSIFICATION_COLOR, DISPOSITION_COLOR, STATUS_COLOR, branchMeta, checkRows, checkTitle,
+  nextSteps, rootBlocker,
   checklist, groupSummaries, migrationStats, openProblems, progressFromEvents, rail,
   retryDisplay, sandboxCard, shortSha, summarise, verdictLine, type ProblemSummary,
 } from '../../lib/migration';
@@ -24,6 +25,9 @@ import {
 
 export function Migration() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
   const { api } = useAuth();
 
   const [project, setProject] = useState<Project | null>(null);
@@ -100,6 +104,9 @@ export function Migration() {
   });
   const unresolved = openProblems(problems);
   const rows = verification ? checkRows(verification.checks) : [];
+  const blocker = verification && verification.overall !== 'VERIFIED'
+    ? rootBlocker(verification.checks)
+    : null;
   const card = sandboxCard(sandbox);
   // Rebuilt from the events themselves, so a refresh mid-build restores the
   // same picture rather than an empty panel.
@@ -241,6 +248,79 @@ export function Migration() {
                 >
                   {verdictLine(verification.overall, verification.checks)}
                 </div>
+
+                {/* The blocker and what unblocks it.
+                    A run that ends unverified often has no open gate — the loop
+                    ran out of attempts rather than stopping to ask — so
+                    "human action required" named a need without naming the act.
+                    The nine checks are gated on each other, so only the first
+                    failure is worth acting on; the rest are its consequences. */}
+                {blocker && (
+                  <div className="blocker">
+                    <div className="mono blocker-head">
+                      BLOCKED BY {checkTitle(blocker.check).toUpperCase()}
+                      {blocker.downstream.length > 0 && (
+                        <span className="blocker-downstream">
+                          {' '}· {blocker.downstream.length} further check
+                          {blocker.downstream.length === 1 ? '' : 's'} fail as a result
+                        </span>
+                      )}
+                    </div>
+                    {nextSteps(blocker.check).map((step) => (
+                      <div key={step.label} className="blocker-step">
+                        <div className="blocker-step-label">{step.label}</div>
+                        <div className="blocker-step-detail">{step.detail}</div>
+                      </div>
+                    ))}
+                    <div className="blocker-actions">
+                      {/* First, because it is what the panel is telling you to
+                          do. Discovery and the assessment are not repeated —
+                          the approval already given is carried forward. */}
+                      <button
+                        className="primary compact"
+                        disabled={retrying}
+                        onClick={async () => {
+                          if (!id) return;
+                          setRetrying(true);
+                          setRetryError(null);
+                          try {
+                            await api.retryMigration(id);
+                            await load();
+                          } catch (e) {
+                            setRetryError((e as Error).message);
+                          } finally {
+                            setRetrying(false);
+                          }
+                        }}
+                      >
+                        {retrying ? 'Starting…' : 'Retry the migration'}
+                      </button>
+                      <a
+                        className="ghost"
+                        href={`/projects/${id}/sandbox`}
+                        onClick={(e) => { e.preventDefault(); navigate(`/projects/${id}/sandbox`); }}
+                      >
+                        Open the evidence package
+                      </a>
+                      {run.branch.pushed && (
+                        <a
+                          className="ghost"
+                          href={`${project?.repository.url.replace(/\.git$/, '')}/tree/${run.branch.name}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          View the branch on GitHub
+                        </a>
+                      )}
+                    </div>
+                    {retryError && <div className="error">{retryError}</div>}
+                    <div className="mono blocker-note">
+                      A retry re-runs the approved plan from the base commit. It does not
+                      repeat discovery or the assessment, and it does not ask for approval
+                      again — the branch is rebuilt from what you already authorised.
+                    </div>
+                  </div>
+                )}
                 {rows.map((r) => (
                   <div key={r.check} className="check-row">
                     <span className="mono check-glyph" style={{ color: r.colour }}>

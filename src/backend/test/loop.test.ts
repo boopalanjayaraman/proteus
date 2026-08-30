@@ -1,3 +1,4 @@
+import { SCOPE_COMPATIBILITY, migrationConstraints } from '../src/agent/flows/migration';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import pino from 'pino';
@@ -870,5 +871,173 @@ describe('the agent is told the runtime it is migrating for', () => {
   it('does not invent a version it was not given', () => {
     expect(withProfile({ language: 'Kotlin', buildSystem: 'Gradle' }))
       .toEqual({ language: 'Kotlin', buildSystem: 'Gradle' });
+  });
+});
+
+describe('the library constraint the agent needs', () => {
+  /**
+   * A run compiled `org.bouncycastle.pqc.crypto.mlkem` against bcprov 1.78.1
+   * and failed with "package does not exist".
+   *
+   * Verified against Maven Central: bcprov-jdk18on 1.78.1 ships 0 classes under
+   * `pqc/crypto/mlkem/` and 34 under `pqc/crypto/crystals/kyber/`. The rename
+   * landed in 1.79. The agent upgraded the dependency and wrote the imports in
+   * two separate changes, and nothing checked that the version it chose
+   * contained the package it imported.
+   */
+  it('names the version the mlkem package actually arrived in', () => {
+    const prompt = migrationConstraints({ language: 'Java', languageVersion: '17' }).join('\n');
+    expect(prompt).toContain('1.79');
+    // Both halves, because getting only one right is what happened.
+    expect(prompt).toContain('crystals.kyber');
+    expect(prompt).toContain('1.78.1');
+  });
+
+  it('names the exact JCA package, which is not under pqc', () => {
+    /**
+     * The second attempt reached for
+     * `org.bouncycastle.pqc.jcajce.interfaces.MLKEMPublicKey`, which exists in
+     * no version. Verified against the 1.80 jar: `pqc/jcajce/interfaces` holds
+     * Dilithium, Falcon, BIKE and CMCE and no MLKEM at all — the ML-KEM JCA
+     * types were promoted out of the `pqc` namespace into
+     * `org.bouncycastle.jcajce.interfaces`.
+     */
+    const prompt = migrationConstraints({ language: 'Java' }).join('\n');
+    expect(prompt).toContain('org.bouncycastle.jcajce.interfaces.MLKEMPublicKey');
+    expect(prompt).toContain('org.bouncycastle.jcajce.spec.MLKEMParameterSpec');
+    expect(prompt).toContain('NOT under `pqc.jcajce`');
+  });
+
+  it('keeps the low-level package, which IS under pqc', () => {
+    // Both are true at once, which is why stating only one is not enough.
+    const prompt = migrationConstraints({ language: 'Java' }).join('\n');
+    expect(prompt).toContain('org.bouncycastle.pqc.crypto.mlkem.MLKEMGenerator');
+  });
+
+  it('still names the Java 21 gate on javax.crypto.KEM', () => {
+    const prompt = migrationConstraints({ language: 'Java', languageVersion: '17' }).join('\n');
+    expect(prompt).toContain('javax.crypto.KEM');
+    expect(prompt).toContain('21');
+  });
+
+  it('drops the runtime gate once the version clears it', () => {
+    const prompt = migrationConstraints({ language: 'Java', languageVersion: '21' }).join('\n');
+    // The gate block goes; the reference still mentions the API in passing,
+    // because knowing it needs 21 is useful even on 21.
+    expect(prompt).not.toContain('RUNTIME CONSTRAINT');
+    // The library coupling is not version-gated on the language, so it stays.
+    expect(prompt).toContain('1.79');
+  });
+
+  it('says nothing about Java to a Kotlin project', () => {
+    expect(migrationConstraints({ language: 'Kotlin' })).toEqual([]);
+  });
+});
+
+describe('the verified ML-KEM reference', () => {
+  /**
+   * Three runs each invented a different wrong package before this existed:
+   * `pqc.crypto.mlkem` against bcprov 1.78.1 which predates it,
+   * `pqc.jcajce.interfaces.MLKEM*` which exists in no version, and
+   * `javax.crypto.KEM` which needs Java 21.
+   *
+   * Describing the API did not work, so the prompt now carries code that was
+   * compiled and executed on `maven:3.9-eclipse-temurin-17` with bcprov 1.80 —
+   * it printed matching shared secrets, a 32-byte key and a 1088-byte
+   * encapsulation. These assertions pin the imports that actually compile.
+   */
+  const ref = () => migrationConstraints({ language: 'Java', languageVersion: '17' }).join('\n');
+
+  it('carries the imports that compile, which are not guessable', () => {
+    // Neither of these is under `pqc`, and both were got wrong.
+    expect(ref()).toContain('org.bouncycastle.jcajce.SecretKeyWithEncapsulation');
+    expect(ref()).toContain('org.bouncycastle.jcajce.spec.KEMGenerateSpec');
+    expect(ref()).toContain('org.bouncycastle.jcajce.spec.MLKEMParameterSpec');
+  });
+
+  it('names each wrong package a real run reached for', () => {
+    const r = ref();
+    expect(r).toContain('pqc.jcajce.interfaces.MLKEM');
+    expect(r).toContain('javax.crypto.KEM');
+    expect(r).toContain('1.79');
+  });
+
+  it('states the KEM shape, which is the conceptual error under the import errors', () => {
+    // RSA transports a key you generated; a KEM derives one. Reaching for
+    // "encrypt this session key" is what leads to the wrong API.
+    expect(ref()).toContain('There is no "encrypt this key" step');
+  });
+
+  it('reaches the repair prompt as well as the patch prompt', () => {
+    // The repair prompt is the one that runs after a compile error.
+    expect(ref().length).toBeGreaterThan(1500);
+  });
+});
+
+describe('source compatibility with files the agent may not edit', () => {
+  /**
+   * `CryptoUtils.wrapKey(SecretKey, PublicKey)` was replaced with a KEM-shaped
+   * API. `pay/legacy/LegacySettlementExporter` still called the old signature —
+   * and it sat outside the three approved paths, so no repair could reach it.
+   *
+   * The build failed on a file the agent was forbidden to touch. The fixture
+   * even says so in a comment: "The export path still depends on wrapKey() so
+   * it can't move yet." It is a deliberate trap, and the agent walked into it.
+   */
+  it('tells the agent the approved paths are the only editable files', () => {
+    const rule = SCOPE_COMPATIBILITY.join('\n');
+    expect(rule).toContain('not yours to edit');
+    expect(rule).toContain('must still compile');
+  });
+
+  it('says to add a method rather than repurpose a public signature', () => {
+    const rule = SCOPE_COMPATIBILITY.join('\n');
+    expect(rule).toContain('ADD the');
+    expect(rule).toContain('KEEP the old signature working');
+  });
+
+  it('names why a KEM makes this likely, rather than stating it abstractly', () => {
+    // The shape change is inherent to the primitive, not a stylistic choice.
+    expect(SCOPE_COMPATIBILITY.join('\n')).toContain('derives a secret rather than wrapping');
+  });
+
+  it('offers refusal as the honest way out, not a broken build', () => {
+    const rule = SCOPE_COMPATIBILITY.join('\n');
+    expect(rule).toContain('`refusal`');
+    expect(rule).toContain('does not compile helps nobody');
+  });
+});
+
+describe('source compatibility does not mean keeping the old algorithm', () => {
+  /**
+   * The rule said "KEEP the old signature working", and the agent read that as
+   * "keep the old behaviour reachable". It shipped:
+   *
+   *     if ("RSA".equalsIgnoreCase(recipient.getAlgorithm())) {
+   *         Cipher c = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding");
+   *
+   * — a compatibility fallback that left quantum-vulnerable cryptography in an
+   * in-scope file. `PROHIBITED_CRYPTO_ABSENT` and `MIGRATION_POLICY_SATISFIED`
+   * both failed on it, and both for the same reason: `violations` is the set of
+   * in-scope classical usages, and it feeds both checks.
+   *
+   * Everything else passed — build, all 36 baseline tests, and an ML-KEM round
+   * trip with matching shared secrets. One retained branch cost the run.
+   */
+  it('separates keeping a signature from keeping a primitive', () => {
+    const rule = SCOPE_COMPATIBILITY.join('\n');
+    expect(rule).toContain('SIGNATURE, NOT ALGORITHM');
+    expect(rule).toContain('one');
+    expect(rule).toContain('no compatibility fallback');
+  });
+
+  it('shows the exact branch that failed, rather than describing it', () => {
+    // A model that has seen the shape is likelier to recognise it than one
+    // told about it in the abstract.
+    expect(SCOPE_COMPATIBILITY.join('\n')).toContain('equalsIgnoreCase(recipient.getAlgorithm())');
+  });
+
+  it('names the check that catches it', () => {
+    expect(SCOPE_COMPATIBILITY.join('\n')).toContain('PROHIBITED_CRYPTO_ABSENT');
   });
 });

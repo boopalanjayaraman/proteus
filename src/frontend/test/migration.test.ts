@@ -5,7 +5,7 @@ import {
   OUTCOME_COLOR, OUTCOME_LABEL, STAGE_LABEL, STATUS_COLOR, artifactCards, branchMeta,
   capacityNotice, checkRows, checklist, expiryLabel, groupSummaries, migrationStats,
   openProblems, outcomeTiles, progressFromEvents, rail, retryDisplay, sandboxCard,
-  shortSha, summarise, verdictLine, type ProblemSummary,
+  shortSha, summarise, verdictLine, type ProblemSummary, rootBlocker, nextSteps,
 } from '../src/lib/migration';
 
 /** PRD-11 — what the migration screen claims about progress and the contract. */
@@ -399,5 +399,58 @@ describe('PRD-16 · live test progress and sandbox lifecycle on screen', () => {
     // screen should not imply the link still works.
     expect(expiryLabel('2026-08-28T12:00:00Z', now)).toBe('EXPIRED · AWAITING RECLAIM');
     expect(expiryLabel(undefined)).toBe('');
+  });
+});
+
+describe('what a person is actually supposed to do', () => {
+  /**
+   * A run that ends unverified sets `actionRequired` and often has no open gate
+   * — the loop did not stop to ask a question, it ran out of attempts. The
+   * screen said "human action required" with no gate and no options, which is a
+   * dead end: it names a need without naming the act.
+   */
+  const checks = (failing: string[]) =>
+    ['BASELINE_INVARIANTS_PRESERVED', 'BUILD_SUCCESSFUL', 'REQUIRED_TESTS_PASSED',
+     'PROHIBITED_CRYPTO_ABSENT', 'REQUIRED_PQC_PRESENT', 'MIGRATION_POLICY_SATISFIED',
+     'NO_CRITICAL_BLOCKER', 'SANDBOX_DEPLOYMENT_SUCCESSFUL', 'E2E_VERIFICATION_SUCCESSFUL']
+      .map((check) => ({ check, status: failing.includes(check) ? 'FAIL' : 'PASS' }));
+
+  it('names the build as the root cause when everything cascades from it', () => {
+    // Exactly PQC-0009: the build fails, the tests "fail" because nothing
+    // compiled, and the sandbox is simply never reached.
+    const r = rootBlocker(checks([
+      'BUILD_SUCCESSFUL', 'REQUIRED_TESTS_PASSED',
+      'SANDBOX_DEPLOYMENT_SUCCESSFUL', 'E2E_VERIFICATION_SUCCESSFUL',
+    ]));
+    expect(r?.check).toBe('BUILD_SUCCESSFUL');
+    expect(r?.downstream).toHaveLength(3);
+  });
+
+  it('does not blame the sandbox, which only ever fails downstream', () => {
+    const r = rootBlocker(checks(['SANDBOX_DEPLOYMENT_SUCCESSFUL', 'E2E_VERIFICATION_SUCCESSFUL']));
+    // Nothing upstream failed, so the sandbox is the honest answer here.
+    expect(r?.check).toBe('SANDBOX_DEPLOYMENT_SUCCESSFUL');
+  });
+
+  it('uses causal order, not the display order the screen renders in', () => {
+    // Display order puts the baseline invariants first; a diagnosis must not.
+    const r = rootBlocker(checks(['BASELINE_INVARIANTS_PRESERVED', 'BUILD_SUCCESSFUL']));
+    expect(r?.check).toBe('BUILD_SUCCESSFUL');
+  });
+
+  it('returns nothing when everything passed', () => {
+    expect(rootBlocker(checks([]))).toBeNull();
+  });
+
+  it('explains that downstream failures are consequences, not separate problems', () => {
+    const steps = nextSteps('BUILD_SUCCESSFUL');
+    expect(steps[0]?.detail).toContain('consequences');
+    // And always offers a way forward, not just a diagnosis.
+    expect(steps.some((s) => s.label.includes('re-run'))).toBe(true);
+  });
+
+  it('sends an open blocking gate to the gate, not to the diff', () => {
+    const steps = nextSteps('NO_CRITICAL_BLOCKER');
+    expect(steps[0]?.detail).toContain('Answer it on this screen');
   });
 });
