@@ -102,19 +102,69 @@ This exact code was compiled and executed successfully. Use these imports.
     kpg.initialize(MLKEMParameterSpec.ml_kem_768, new SecureRandom());
     KeyPair kp = kpg.generateKeyPair();
 
-    // Sender: one call yields both the session key and the encapsulation to
-    // transmit. There is no "encrypt this key" step — that is the difference
-    // between a KEM and RSA key transport.
+    // Sender: one call yields both a fresh shared secret and the encapsulation
+    // to transmit. A KEM AGREES a key; it does not carry one you already have.
     KeyGenerator gen = KeyGenerator.getInstance("ML-KEM", "BC");
     gen.init(new KEMGenerateSpec(kp.getPublic(), "AES"), new SecureRandom());
     SecretKeyWithEncapsulation sent = (SecretKeyWithEncapsulation) gen.generateKey();
     byte[] toSend = sent.getEncapsulation();   // 1088 bytes for ml_kem_768
-    SecretKey sessionKey = sent;               // 32 bytes, usable as AES
+    SecretKey agreedSecret = sent;             // 32 bytes, usable as AES
 
     // Receiver: recovers the identical secret from the encapsulation.
     KeyGenerator ext = KeyGenerator.getInstance("ML-KEM", "BC");
     ext.init(new KEMExtractSpec(kp.getPrivate(), toSend, "AES"));
     SecretKey received = ext.generateKey();
+
+WHICH OF THE TWO CONSTRUCTIONS YOU NEED — read this before writing anything.
+
+The code above agrees a NEW key. It is correct only where the caller does not
+choose the key. Decide by looking at the signature you are replacing:
+
+  (a) The method DERIVES the key — nothing is passed in, e.g.
+      \`SecretKey establishSession(PublicKey peer)\`. Use the code above as it
+      stands. The agreed secret is the session key.
+
+  (b) The method TRANSPORTS A KEY THE CALLER SUPPLIED, e.g.
+      \`byte[] wrapSessionKey(SecretKey sessionKey, PublicKey peer)\`.
+      **A bare KEM cannot do this.** Returning \`sent.getEncapsulation()\` and
+      ignoring the \`sessionKey\` argument compiles, looks plausible, and is
+      wrong: the peer then decapsulates a DIFFERENT key from the one the caller
+      handed you, so \`unwrap(wrap(k))\` no longer returns \`k\` and every caller
+      holding that key is silently broken.
+
+      Use KEM-then-wrap: encapsulate to derive a key-encryption key, wrap the
+      caller's key under it, and send both.
+
+    // (b) KEM-then-wrap — preserves \`wrapSessionKey(SecretKey, PublicKey)\`.
+    import javax.crypto.spec.SecretKeySpec;
+
+    KeyGenerator gen = KeyGenerator.getInstance("ML-KEM", "BC");
+    gen.init(new KEMGenerateSpec(peer, "AES"), new SecureRandom());
+    SecretKeyWithEncapsulation est = (SecretKeyWithEncapsulation) gen.generateKey();
+
+    Cipher kw = Cipher.getInstance("AESWrap", "BC");
+    kw.init(Cipher.WRAP_MODE, new SecretKeySpec(est.getEncoded(), "AES"));
+    byte[] wrappedKey = kw.wrap(sessionKey);          // the CALLER'S key
+
+    byte[] wire = new byte[est.getEncapsulation().length + wrappedKey.length];
+    System.arraycopy(est.getEncapsulation(), 0, wire, 0, est.getEncapsulation().length);
+    System.arraycopy(wrappedKey, 0, wire, est.getEncapsulation().length, wrappedKey.length);
+    return wire;                                       // 1088 + 40 = 1128 bytes
+
+    // Reverse: split at 1088, extract, unwrap.
+    byte[] encapsulation = Arrays.copyOfRange(wire, 0, 1088);
+    byte[] wrappedKey2   = Arrays.copyOfRange(wire, 1088, wire.length);
+
+    KeyGenerator ext2 = KeyGenerator.getInstance("ML-KEM", "BC");
+    ext2.init(new KEMExtractSpec(ours, encapsulation, "AES"));
+    SecretKeyWithEncapsulation est2 = (SecretKeyWithEncapsulation) ext2.generateKey();
+
+    Cipher ku = Cipher.getInstance("AESWrap", "BC");
+    ku.init(Cipher.UNWRAP_MODE, new SecretKeySpec(est2.getEncoded(), "AES"));
+    return (SecretKey) ku.unwrap(wrappedKey2, "AES", Cipher.SECRET_KEY);
+
+Whichever you use, a key put in must come back out. If the method you are
+replacing round-tripped, yours must round-trip too.
 
 Notes that cost three runs:
   - \`SecretKeyWithEncapsulation\` is \`org.bouncycastle.jcajce\`, NOT \`javax.crypto\`.

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { apiSurfaceOf } from '../core/migration/apiSurface';
+import { approvedTargetOf } from '../core/migration/target';
 import { PROBE_PATH, probeShapeOf, probeSource } from '../core/migration/roundTripProbe';
 import {
   type Assessment, type BehavioralInvariant, type MigrationRun, type Project,
@@ -596,5 +597,8 @@ async function buildMigrationContext(
   // compile against the callers it is not allowed to see.
   const apiSurface = await apiSurfaceOf(wc).catch(() => []);
 
-  return { planItems, targetPaths, sources, apiSurface };
+  // The field the probe and test generation both depend on. It was never set.
+  const target = approvedTargetOf(planItems);
+
+  return { planItems, targetPaths, sources, apiSurface, ...(target ? { target } : {}) };
 }

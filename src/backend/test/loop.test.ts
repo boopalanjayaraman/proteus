@@ -1333,10 +1333,38 @@ describe('the verified ML-KEM reference', () => {
     expect(r).toContain('1.79');
   });
 
-  it('states the KEM shape, which is the conceptual error under the import errors', () => {
-    // RSA transports a key you generated; a KEM derives one. Reaching for
-    // "encrypt this session key" is what leads to the wrong API.
-    expect(ref()).toContain('There is no "encrypt this key" step');
+  /**
+   * This asserted the reference contained `There is no "encrypt this key" step`.
+   *
+   * That sentence was written to stop the agent reaching for an RSA-shaped API
+   * and picking the wrong imports, and it worked for that. It also taught the
+   * agent that a KEM *replaces* the caller's key — so on
+   * `wrapSessionKey(SecretKey sessionKey, PublicKey peer)` it returned
+   * `sent.getEncapsulation()` and left the argument unused. Measured against the
+   * real agent on `settlement-api`: **3 of 3 runs** produced a `wrapSessionKey`
+   * whose output the peer could not decapsulate back to the key that was sent.
+   *
+   * The distinction the reference actually needs is not "KEM versus encrypt" but
+   * *which* of the two constructions the signature calls for. With that stated,
+   * the same three runs went 0 of 3.
+   */
+  it('distinguishes deriving a key from transporting a caller-supplied one', () => {
+    const r = ref();
+    // A KEM agrees a key — still true, and still what steers the imports.
+    expect(r).toContain('A KEM AGREES a key');
+    // But a signature that takes a key must keep it, which needs KEM-then-wrap.
+    expect(r).toContain('KEM-then-wrap');
+    expect(r).toContain('wrapSessionKey(SecretKey sessionKey, PublicKey peer)');
+    expect(r).toContain('AESWrap');
+    // And the property that made the failure visible at all.
+    expect(r).toContain('a key put in must come back out');
+  });
+
+  it('warns that discarding the caller’s key compiles and is still wrong', () => {
+    // The failure mode is silent: it builds, and only a round-trip assertion
+    // catches it. The reference has to say so, because nothing else will.
+    expect(ref()).toContain('ignoring the');
+    expect(ref()).toContain('sessionKey');
   });
 
   it('reaches the repair prompt as well as the patch prompt', () => {

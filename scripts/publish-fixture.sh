@@ -2,14 +2,20 @@
 # Publish fixtures/payments-api as a standalone GitHub repository.
 #
 #   scripts/publish-fixture.sh northwind-pay/payments-api
+#   scripts/publish-fixture.sh boopalanjayaraman/settlement-api settlement-api
+#
+# The second argument names a directory under fixtures/ and defaults to
+# payments-api. Only that directory is published — fixtures/README.md, which
+# says which test is rigged, must never travel with it.
 #
 # Builds a clean history in a temp directory and force-pushes. The fixture is
 # authored in this repo and published, not developed in place, so its history
 # stays free of Proteus's.
 set -euo pipefail
 
-TARGET="${1:?usage: publish-fixture.sh <owner>/<repo>}"
-SRC="$(cd "$(dirname "$0")/.." && pwd)/fixtures/payments-api"
+TARGET="${1:?usage: publish-fixture.sh <owner>/<repo> [fixture-dir]}"
+FIXTURE="${2:-payments-api}"
+SRC="$(cd "$(dirname "$0")/.." && pwd)/fixtures/${FIXTURE}"
 [ -d "$SRC" ] || { echo "not found: $SRC" >&2; exit 1; }
 
 WORK="$(mktemp -d)"

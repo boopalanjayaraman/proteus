@@ -11,6 +11,7 @@ import { advance, BaselineService, type BuildCommands } from '../core/migration/
 import { ChangeRecorder, closeAttempt, openAttempt } from '../core/migration/changes';
 import { changeSetsOf } from '../core/migration/changeSets';
 import { apiSurfaceOf } from '../core/migration/apiSurface';
+import { targetOfItem } from '../core/migration/target';
 import {
   authoriseRepair, classifyDeterministically, factsForFailure, touchedInvariant,
   unclassified, LEGACY_ALGORITHM, type Classification, type DiagnosisContext,
@@ -948,9 +949,7 @@ async function resolvePaths(wc: WorkingCopy, names: string[]): Promise<string[]>
 
 function targetOf(assessment: Assessment, item: PlanItem) {
   void assessment;
-  const text = `${item.action} ${item.rationale}`;
-  const m = /ML-KEM-(512|768|1024)/i.exec(text);
-  return m ? { target: 'ML-KEM', parameterSet: m[0].toUpperCase() } : undefined;
+  return targetOfItem(item);
 }
 
 /**
