@@ -368,6 +368,163 @@ covered did not work on the one input that mattered.
 
 ---
 
+## "36/36 passing" over a tree that did not compile
+
+The worst bug in the project so far, because it did not fail — it **reported success**.
+
+```ts
+const passed = execution.execution.status === 'SUCCESS' || newFailures.length === 0;
+```
+
+A build that fails at `compile` runs no tests. No tests means no failures. No failures
+means `newFailures.length === 0`, and the second clause forgives the non-zero exit. The
+loop announced *"Migrate Key Transport to ML-KEM-768 — 36/36 passing · all tests green"*,
+committed, pushed the branch, and handed a tree to verification whose **main sources did
+not build**. Verification ran its own `package`, failed, and reported a contradiction no
+human could act on: green tests and a broken build, in the same run.
+
+Where did `36` come from, if nothing ran? `mvn verify` does not clean, and the inventory is
+read from whatever JUnit XML is on disk. The reports still sitting in `target/` were the
+**baseline's**. The run inherited someone else's passes.
+
+Three fixes, because it took three things to hold the lie up:
+
+1. The executor discards `target/surefire-reports` and friends *before* running, so an
+   inventory can only describe the run that produced it.
+2. `passed` requires `inventory.total > 0` — a non-zero exit is forgiven only when tests
+   actually ran and every failure was already failing at base.
+3. A characterization test that fails on the base commit is now **removed** from the branch,
+   not merely announced. `SettlementPreservationCharacterizationTest` called
+   `new SettlementSigner()` against a class with no no-arg constructor; it was flagged
+   `EXEC-TEST-001`, left committed, and failed `testCompile` for every build afterwards.
+   The run could not have recovered no matter what the agent did next.
+
+> "No tests failed" and "no tests ran" are the same sentence to a boolean and opposite
+> facts to a person. Any check that treats absence of failure as evidence of success needs
+> to first establish that the thing ran at all — and that the evidence it is reading was
+> produced by *this* run.
+
+### The half I missed the first time
+
+Fixing the above makes the loop *notice* the broken build. It does not make the agent able
+to repair it, and I claimed the job was done before checking that.
+
+`readLog` fetches the full build log from blob storage:
+
+```ts
+return (await deps.blobs.get(path).catch(() => Buffer.from(''))).toString('utf8');
+```
+
+Any failure — missing object, unreachable bucket, expired credential — becomes `''`, and
+`structureFailure` builds the diagnosis from an empty log. A compile failure has no failing
+tests to describe it; the compiler error *is* the evidence, and it lives only in that log.
+So the agent received:
+
+```json
+{ "phase": "build", "error": "mvn -B verify exited 1", "relevant_logs": [] }
+```
+
+Asked to repair a build, and told nothing whatever about what was wrong with it. The lines
+it needed — `cannot find symbol: method sha256Hex` — were on the `ExecutionRun` in Mongo the
+entire time, in `logExcerpt`, put there by the executor and never read.
+
+`structureFailure` now falls back to that excerpt, `readLog` warns instead of swallowing,
+and `firstErrorLine` skips Maven's `COMPILATION ERROR :` heading — which, being the first
+`[ERROR]` line of every failed compile, gave every compile failure in the project one
+`problemKey` and so one shared retry budget.
+
+> An empty-string fallback on a network read is a silent data loss, not a default. And the
+> question to ask of any evidence pipeline is not "did we capture it" but "does it reach the
+> thing that has to act on it".
+
+---
+
+## Writing code against files you cannot see
+
+Two agent defects reached a demo, and they looked unrelated until both were reproduced:
+
+- Migrating `CryptoUtils`, it dropped `sha256Hex`, `b64` and `unb64`. `IdempotencyStore` and
+  `LegacySettlementExporter` call them; the tree stopped compiling in files the agent was
+  never authorised to edit.
+- Asked to characterize an invariant about the settlement signer, it wrote
+  `new SettlementSigner()`. The real constructor takes a `SigningKeyProvider`.
+
+Same cause. `PatchContext.files` and `MigrationContext.sources` carry **only the paths the
+plan authorises** — correct for what may be *edited*, wrong for what must be *compiled
+against*. The patch prompt even said "every other file must still compile against what you
+write" while withholding the means to know what those files need.
+
+Neither was a reasoning failure. Both were a model doing the best possible job with a
+context missing the one fact required.
+
+`apiSurfaceOf` extracts public constructors and method signatures — never bodies — from
+every class in the repository and supplies them to the patch, repair and test-generation
+prompts. For `payments-api` that is 20 classes and 4.2 KB.
+
+Measured against the real agent: 4/4 samples compiled before the fix and 6/6 after, so the
+sample does not prove causation — the failure was intermittent. What it does establish is
+that the two facts which were missing in the failing runs are now present, and the
+mechanism that produced both is closed.
+
+> Before concluding a model reasoned badly, check what it was shown. "It invented a
+> constructor" and "it deleted a method" are the same bug when the class is absent from the
+> context — and no amount of prompt severity fixes a missing fact.
+
+---
+
+## The claim the product exists to make, satisfied by a suite name
+
+`REQUIRED_PQC_PRESENT` asserts the migrated code really performs post-quantum key
+establishment. It was established like this:
+
+```ts
+const kemTests = verifyRun.inventory.tests.filter(
+  (t) => /kem|encaps|decaps|roundtrip|sharedsecret/i.test(`${t.suite}${t.name}`),
+);
+```
+
+A match on a **name** — chosen by the agent whose work is being judged.
+
+A real run produced:
+
+```java
+public byte[] wrapSessionKey(SecretKey sessionKey, PublicKey peer) {
+    ...
+    return sent.getEncapsulation();     // sessionKey is never used
+}
+```
+
+The caller's session key silently discarded, so `unwrap(wrap(k)) != k`. Alongside it the
+agent wrote `MlKemMigrationAcceptanceTest`, asserting the algorithm *string*, the key type
+*string*, and the ciphertext *length* — 1088 bytes. All three passed. The suite name matched
+`kem`. Verification reported:
+
+> "ML-KEM-768 round trip executed against the resolved provider; shared secrets match; no
+> test stubs the primitive."
+
+It compiled, passed 34/34 unit tests, deployed to a sandbox, and passed all three E2E
+scenarios. Nothing in the pipeline could see it, because the fixture's `CryptoServiceTest`
+documents its own gap — *"nothing asserts that a transported key can be recovered by the
+peer"* — and the generated suite inherited exactly that blind spot.
+
+`SETTLEMENT_SCENARIOS` already had the right instinct, in its own comment: named here
+rather than generated, "because a model-authored end-to-end suite would be judging the
+migration against criteria the migration's author chose." That reasoning was never applied
+to the round trip.
+
+`roundTripProbe.ts` generates a JUnit test mechanically from the repository's API surface —
+no model involved — asserting `assertArrayEquals(sessionKey.getEncoded(),
+recovered.getEncoded())`. Verification now keys off that one suite. Confirmed both ways
+against real builds: it **fails** the discarding implementation (`array contents differ at
+index [0], expected: <19> but was: <56>`) and **passes** KEM-then-wrap.
+
+> An algorithm identifier is a string. A key type is a string. A ciphertext length is an
+> integer. None of them is the property they stand in for, and a check that accepts them is
+> measuring vocabulary, not behaviour. When the evidence for a claim can be produced by the
+> thing being judged, it is not evidence.
+
+---
+
 ## Cross-cutting
 
 Three habits that would have caught most of the above:

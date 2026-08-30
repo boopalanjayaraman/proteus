@@ -10,6 +10,7 @@ import { WorkingCopy } from '../core/discovery/workingCopy';
 import { advance, BaselineService, type BuildCommands } from '../core/migration/baseline';
 import { ChangeRecorder, closeAttempt, openAttempt } from '../core/migration/changes';
 import { changeSetsOf } from '../core/migration/changeSets';
+import { apiSurfaceOf } from '../core/migration/apiSurface';
 import {
   authoriseRepair, classifyDeterministically, factsForFailure, touchedInvariant,
   unclassified, LEGACY_ALGORITHM, type Classification, type DiagnosisContext,
@@ -392,7 +393,25 @@ async function runPlanItem(
     const newFailures = execution.inventory.tests.filter(
       (t) => t.status === 'FAILED' && !known.has(t.testId),
     );
-    const passed = execution.execution.status === 'SUCCESS' || newFailures.length === 0;
+    /*
+     * A failing command is forgiven only when tests actually ran and every
+     * failure among them was already failing on the base commit.
+     *
+     * This read `status === 'SUCCESS' || newFailures.length === 0`, and the
+     * second clause is satisfied by the one state it must never accept: a build
+     * that does not compile runs no tests, so it has no failures, so it passed.
+     * The loop then reported "all tests green" over a tree whose main sources
+     * did not build, and the lie held all the way to verification — which runs
+     * its own build, fails, and reports a contradiction nobody can act on.
+     *
+     * `inventory.total > 0` is the missing half. It is only trustworthy because
+     * the executor now discards the previous run's reports first; without that,
+     * a compile failure inherits the last run's inventory and this check passes
+     * on someone else's results.
+     */
+    const testsRan = execution.inventory.total > 0;
+    const passed = execution.execution.status === 'SUCCESS'
+      || (testsRan && newFailures.length === 0);
 
     if (passed) {
       await repos.events.emit(project.projectId, {
@@ -574,6 +593,8 @@ async function applyPatch(
     files,
     acceptanceTests,
     invariants: baseline.invariants,
+    // What it must keep working, including the callers it may not edit.
+    apiSurface: await apiSurfaceOf(deps.wc).catch(() => []),
     // From what discovery established, not from constants. The stack was
     // hardcoded here while the profile sat unread on the project — so the agent
     // was told "Java" and never "Java 17", and proposed an API that arrived in
@@ -639,6 +660,7 @@ async function applyRepair(
     ...stackOf(project),
     files,
     invariants: baseline.invariants,
+    apiSurface: await apiSurfaceOf(deps.wc).catch(() => []),
     priorAttempts,
   });
 
@@ -931,10 +953,27 @@ function targetOf(assessment: Assessment, item: PlanItem) {
   return m ? { target: 'ML-KEM', parameterSet: m[0].toUpperCase() } : undefined;
 }
 
+/**
+ * The build log, for the diagnosis.
+ *
+ * An empty return is not fatal — `structureFailure` falls back to the excerpt
+ * stored on the ExecutionRun — but it is worth saying out loud. This used to
+ * swallow the reason entirely, so a bucket that had stopped answering looked
+ * exactly like a build that printed nothing, and the agent was handed an empty
+ * log either way with no indication which had happened.
+ */
 async function readLog(deps: ItemDeps, gcsUri: string | undefined): Promise<string> {
   if (!gcsUri) return '';
   const path = gcsUri.replace(/^gs:\/\/[^/]+\//, '');
-  return (await deps.blobs.get(path).catch(() => Buffer.from(''))).toString('utf8');
+  try {
+    return (await deps.blobs.get(path)).toString('utf8');
+  } catch (e) {
+    deps.log.warn(
+      { gcsUri },
+      `could not read the build log, diagnosing from the stored excerpt: ${(e as Error).message}`,
+    );
+    return '';
+  }
 }
 
 async function revertChange(

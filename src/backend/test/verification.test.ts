@@ -182,7 +182,7 @@ function inputs(over: Partial<Parameters<typeof verify>[0]> = {}) {
   const inv = inventoryOf([
     ['pay.A', [{ name: 'one' }, { name: 'two' }]],
     ['pay.B', [{ name: 'three' }]],
-    ['pay.security.CryptoServiceKemTest', [{ name: 'roundTripsTheSharedSecret' }]],
+    ['pay.ProteusKeyTransportRoundTripTest', [{ name: 'roundTripsTheSharedSecret' }]],
   ]);
   return {
     run: migrationRun(),
@@ -197,7 +197,7 @@ function inputs(over: Partial<Parameters<typeof verify>[0]> = {}) {
     tests: { execution: execution(), inventory: inv },
     generated: {
       characterization: [] as string[],
-      acceptance: ['pay.security.CryptoServiceKemTest'],
+      acceptance: ['pay.ProteusKeyTransportRoundTripTest'],
     },
     candidates: [] as Candidate[],
     verificationRunId: 'exec_verify',
@@ -438,10 +438,10 @@ describe('AC-5, FR-7 · a subset relation, not a count', () => {
       ['pay.A', [{ name: 'one' }, { name: 'two' }]],
       ['pay.B', [{ name: 'three' }]],
       ['pay.CharTest', [{ name: 'pins' }]],
-      ['pay.KemTest', [{ name: 'roundTrip', failure: 'not implemented' }]],
+      ['pay.ProteusKeyTransportRoundTripTest', [{ name: 'roundTrip', failure: 'not implemented' }]],
     ]);
     const result = checkTests(baseline(), { execution: execution(), inventory: inv },
-      { characterization: ['pay.CharTest'], acceptance: ['pay.KemTest'] });
+      { characterization: ['pay.CharTest'], acceptance: ['pay.ProteusKeyTransportRoundTripTest'] });
     // Characterization green shows behaviour preserved; acceptance red means
     // nothing changed. Passing on the first alone would be satisfiable by doing
     // nothing at all.
@@ -872,7 +872,7 @@ async function approvedProject(baseCommitSha: string) {
 function referenceExecutions() {
   const green = [
     surefireReport('pay.security.SettlementSignerTest', [{ name: 'signs' }]),
-    surefireReport('pay.security.CryptoServiceKemTest', [
+    surefireReport('pay.ProteusKeyTransportRoundTripTest', [
       { name: 'roundTripsTheSharedSecret' }, { name: 'producesFips203Sizes' },
     ]),
     failsafeReport('pay.PartnerHandshakeIntegrationTest', [

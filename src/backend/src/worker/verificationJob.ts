@@ -22,6 +22,7 @@ import type { SandboxLifecycleService } from '../core/services/sandboxLifecycle'
 import type { BlobStore } from '../integrations/storage/blobs';
 import { probeStartup, runScenarios, SETTLEMENT_SCENARIOS } from '../verification/e2e';
 import { mayDeploy, verify, type VerificationOutcome } from '../verification/service';
+import { PROBE_SUITE } from '../core/migration/roundTripProbe';
 
 /**
  * Verification and the sandbox (spec §34–§37).
@@ -332,11 +333,24 @@ async function establishRoundTrip(
     }
   }
 
-  // The round trip is established by the acceptance suite that asserts it
-  // having actually run and passed — not by its existence on disk.
-  const kemTests = verifyRun.inventory.tests.filter(
-    (t) => /kem|encaps|decaps|roundtrip|round_trip|sharedsecret/i.test(`${t.suite}${t.name}`),
-  );
+  /*
+   * The round trip is established by Proteus's own probe, and only by it.
+   *
+   * This used to select any test whose suite or name matched
+   * `/kem|encaps|decaps|roundtrip|sharedsecret/i` — a match on a name chosen by
+   * the agent whose work is being judged. A run produced a `wrapSessionKey`
+   * that discarded its argument, together with a `MlKemMigrationAcceptanceTest`
+   * asserting the algorithm string, the key type string and the ciphertext
+   * length. All three passed, the suite name matched `kem`, and verification
+   * reported "round trip executed; shared secrets match" about code that
+   * transported nothing.
+   *
+   * `PROBE_SUITE` is generated from the repository's API surface with no model
+   * involved and asserts that a key put in comes back out. If it did not run,
+   * nothing is established — which is the honest answer, and the one the name
+   * match was papering over.
+   */
+  const kemTests = verifyRun.inventory.tests.filter((t) => t.suite === PROBE_SUITE);
   const executed = kemTests.length > 0;
   const allPassed = executed && kemTests.every((t) => t.status === 'PASSED');
 
@@ -346,11 +360,12 @@ async function establishRoundTrip(
     mockedPrimitive: mocked,
     ...(target ? { parameterSetResolved: executed && allPassed ? target : undefined } : {}),
     detail: executed
-      ? `${kemTests.length} KEM test(s) ran in ${verifyRun.execution.command}; `
+      ? `${kemTests.length} round-trip probe assertion(s) ran in ${verifyRun.execution.command}; `
         + `${kemTests.filter((t) => t.status === 'PASSED').length} passed`
         + (mocked ? `. ${stubs.join('; ')}` : '. No test stubs the primitive.')
-      : 'No test exercising encapsulation or decapsulation ran, so nothing was established '
-        + 'about the primitive at runtime.',
+      : `Proteus's round-trip probe (${PROBE_SUITE}) did not run, so nothing was `
+        + 'established about the primitive at runtime. A suite that merely names the '
+        + 'algorithm is not evidence that a key survives encapsulation.',
   } as {
     executed: boolean; sharedSecretsMatch: boolean; mockedPrimitive: boolean;
     parameterSetResolved?: string; detail: string;

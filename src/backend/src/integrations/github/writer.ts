@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { parseRepositoryUrl, RepositoryAccessError } from './client';
@@ -99,6 +99,20 @@ export class GitWriter {
     const full = safeJoin(this.dir, relativePath);
     await mkdir(dirname(full), { recursive: true });
     await writeFile(full, content, 'utf8');
+  }
+
+  /**
+   * Removes a file from the working copy.
+   *
+   * For an artifact the rules have already refused after it was committed. A
+   * generated test that fails on the base commit is not merely uninformative —
+   * if it fails because it does not compile, it fails `testCompile` for every
+   * build that follows it, and the run never recovers.
+   *
+   * Same path check as `writeFile`, for the same reason.
+   */
+  async removeFile(relativePath: string): Promise<void> {
+    await rm(safeJoin(this.dir, relativePath), { force: true });
   }
 
   /**

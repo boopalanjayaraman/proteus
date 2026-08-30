@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
@@ -85,6 +85,18 @@ export class ProcessExecutor implements BuildExecutor {
 
   async run(spec: ExecutionSpec): Promise<ExecutionOutcome> {
     const started = Date.now();
+
+    // Discard the previous run's JUnit XML first.
+    //
+    // Neither `mvn verify` nor `gradle test` cleans, and the inventory is read
+    // from whatever XML is on disk afterwards. So a build that fails at
+    // *compile* runs no tests, leaves the previous run's reports untouched, and
+    // is read as that run's results — a broken tree reporting the baseline's
+    // "36/36 passing". Adding `clean` to the command would fix it and throw
+    // away the incremental build with it; deleting the report directories is
+    // the same guarantee for none of the cost.
+    await discardReports(spec.workdir);
+
     const [file, args] = this.commandLine(spec);
     const { exitCode, log, timedOut } = await this.spawn(file, args, spec);
 
@@ -216,6 +228,20 @@ export class ScriptedExecutor implements BuildExecutor {
       provider: answer.provider ?? {},
     };
   }
+}
+
+/**
+ * Removes the previous run's JUnit XML, so the inventory can only describe this one.
+ *
+ * Exported because the guarantee is worth asserting directly: the difference
+ * between "no tests failed" and "no tests ran" is the whole of `EXEC-VER-003`,
+ * and on disk those two look identical unless someone deletes the evidence of
+ * the last run before producing the next.
+ */
+export async function discardReports(workdir: string): Promise<void> {
+  await Promise.all(REPORT_DIRS.map(
+    (dir) => rm(join(workdir, dir), { recursive: true, force: true }).catch(() => undefined),
+  ));
 }
 
 /** Reads every JUnit XML the run produced, from wherever the build system put it. */

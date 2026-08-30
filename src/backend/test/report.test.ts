@@ -186,7 +186,7 @@ async function completeRun(sandboxUrl: string, blobs = new InMemoryBlobStore()) 
   // then the verification build and test.
   const green = [
     surefireReport('pay.security.SettlementSignerTest', [{ name: 'signs' }]),
-    surefireReport('pay.security.CryptoServiceKemTest', [
+    surefireReport('pay.ProteusKeyTransportRoundTripTest', [
       { name: 'roundTripsTheSharedSecret' }, { name: 'producesFips203Sizes' },
     ]),
     failsafeReport('pay.PartnerHandshakeIntegrationTest', [

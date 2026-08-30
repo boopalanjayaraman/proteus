@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { apiSurfaceOf } from '../core/migration/apiSurface';
+import { PROBE_PATH, probeShapeOf, probeSource } from '../core/migration/roundTripProbe';
 import {
   type Assessment, type BehavioralInvariant, type MigrationRun, type Project,
 } from '@proteus/schema';
@@ -301,6 +303,49 @@ export async function runTestEngineering(
       });
     }
 
+    // ---- 5b. The round-trip probe (ours, not the agent's) ----------------
+    //
+    // Every other check of the key establishment can be satisfied without the
+    // primitive working: an algorithm identifier is a string, a key type is a
+    // string, a ciphertext length is an integer. One run passed all three while
+    // `wrapSessionKey` discarded its argument. So this test is generated from
+    // the repository's API surface, with no model involved, and asserts the one
+    // property the others stand in for.
+    const probeShape = probeShapeOf(migrationContext.apiSurface ?? []);
+    const approvedTarget = migrationContext.target?.parameterSet
+      ?? migrationContext.target?.target;
+    if (probeShape && approvedTarget) {
+      await git.writeFile(PROBE_PATH, probeSource(probeShape, approvedTarget));
+      await recorder.commit({
+        run: current, attempt,
+        changeType: 'TEST',
+        intent: 'TEST_ENGINEERING',
+        summary: 'Key transport round-trip probe',
+        rationale: 'Written by Proteus rather than the agent: REQUIRED_PQC_PRESENT must rest '
+          + 'on a key surviving encapsulation and decapsulation, not on a suite name matching '
+          + 'a pattern.',
+        paths: [PROBE_PATH],
+        commitMessage: 'test(pqc): key transport round-trip probe',
+        findingIds: [], planItemIds: [],
+      }).catch((e) => log.warn(`could not commit the round-trip probe: ${(e as Error).message}`));
+
+      written.push(PROBE_PATH);
+      kinds.set(PROBE_PATH, 'MIGRATION_ACCEPTANCE_TEST');
+
+      await repos.events.emit(project.projectId, {
+        type: 'TEST_CREATED', phase: 'MIGRATION', level: 'ACTIVITY', severity: 'INFO',
+        stage: current.stage,
+        title: 'Key transport round-trip probe',
+        message: `migration acceptance test · ${PROBE_PATH} · written by Proteus, not the agent`,
+        actor: 'SYSTEM', refs: { paths: [PROBE_PATH] },
+      });
+    } else {
+      log.warn(
+        { hasShape: Boolean(probeShape), target: approvedTarget },
+        'no round-trip probe could be generated; REQUIRED_PQC_PRESENT will not be established',
+      );
+    }
+
     // ---- 6. Validate against the base commit (EXEC-TEST-002) -------------
     current = await advance(repos, current, 'VALIDATING_BASELINE_TESTS');
     let vacuous: string[] = [];
@@ -339,13 +384,36 @@ export async function runTestEngineering(
         });
       }
       for (const path of verdict.brokenAtBase) {
+        // Withdrawn, not merely announced.
+        //
+        // This used to emit the blocker and leave the file committed. A
+        // characterization test that fails on the base commit often fails
+        // because it does not compile — and once it is in the tree it fails
+        // `testCompile` for every build after it, so the migration cannot
+        // succeed no matter what the agent does next. Reporting a rule while
+        // leaving its violation in place is the worst of both.
+        await git.removeFile(path);
+        await recorder.commit({
+          run: current, attempt,
+          changeType: 'TEST',
+          intent: 'TEST_ENGINEERING',
+          summary: `Withdraw ${path}`,
+          rationale: 'EXEC-TEST-001: it fails on the base commit, so it documents a bug '
+            + 'rather than capturing a baseline. Left in the tree it would fail every '
+            + 'subsequent build.',
+          paths: [path],
+          commitMessage: `test(pqc): withdraw ${path} — fails on the base commit`,
+          findingIds: [], planItemIds: [],
+        }).catch((e) => log.warn({ path }, `could not withdraw: ${(e as Error).message}`));
+
         await repos.events.emit(project.projectId, {
           type: 'MIGRATION_BLOCKER_IDENTIFIED', phase: 'MIGRATION',
           level: 'ACTIVITY', severity: 'WARN',
           stage: 'VALIDATING_BASELINE_TESTS',
-          title: `${path} fails against the unmigrated build`,
+          title: `${path} fails against the unmigrated build — withdrawn`,
           message: 'EXEC-TEST-001: a characterization test that fails on the base commit has '
-            + 'documented a bug, not captured a baseline.',
+            + 'documented a bug, not captured a baseline. It has been removed from the '
+            + 'branch so it cannot break every build that follows.',
           actor: 'SYSTEM', refs: { paths: [path] },
         });
       }
@@ -524,5 +592,9 @@ async function buildMigrationContext(
     }
   }
 
-  return { planItems, targetPaths, sources };
+  // Signatures of everything, not just what may be edited. The agent has to
+  // compile against the callers it is not allowed to see.
+  const apiSurface = await apiSurfaceOf(wc).catch(() => []);
+
+  return { planItems, targetPaths, sources, apiSurface };
 }

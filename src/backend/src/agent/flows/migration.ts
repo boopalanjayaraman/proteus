@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { apiSurfaceLines, type ApiMember } from '../../core/migration/apiSurface';
 import type { BehavioralInvariant, PlanItem, StructuredFailure } from '@proteus/schema';
 import type { ModelClient } from '../model';
 import { PatchInput, RepairInput } from '../tools/registry';
@@ -17,6 +18,16 @@ import { MIGRATION_SYSTEM_INSTRUCTION, ML_KEM_REFERENCE } from '../prompts/migra
  */
 
 export interface PatchContext {
+  /**
+   * Signatures of every public class in the repository.
+   *
+   * `files` carries only what this plan item may edit, so a rewrite cannot see
+   * who calls it. That is how a `CryptoUtils` migration dropped `sha256Hex`,
+   * `b64` and `unb64`: nothing in context showed `IdempotencyStore` using them,
+   * and the resulting tree did not compile in a file the agent was never
+   * authorised to touch.
+   */
+  apiSurface?: ApiMember[];
   planItem: PlanItem;
   /** Only the files this plan item declared. A3 is never shown the repository. */
   files: Array<{ path: string; content: string }>;
@@ -40,6 +51,8 @@ export interface PatchContext {
 }
 
 export interface RepairContext {
+  /** As on PatchContext — a repair must not invent or delete an API either. */
+  apiSurface?: ApiMember[];
   failure: StructuredFailure;
   /** Decided by rules before A3 was asked. Not open to negotiation. */
   classification: string;
@@ -238,6 +251,7 @@ export class MigrationAgent {
         '',
         'The files to change:',
         ...ctx.files.map((f) => `--- ${f.path}\n${f.content}`),
+        ...apiSurfaceLines(ctx.apiSurface ?? []),
         '',
         'Return the complete new content of every file you change.',
       ].filter(Boolean).join('\n'),
@@ -299,6 +313,7 @@ export class MigrationAgent {
         '',
         'The files:',
         ...ctx.files.map((f) => `--- ${f.path}\n${f.content}`),
+        ...apiSurfaceLines(ctx.apiSurface ?? []),
         '',
         'Return the complete new content of every file you change, and — for any test,',
         'mock or fixture — the integrity record justifying the edit.',

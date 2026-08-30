@@ -546,6 +546,53 @@ describe('FR-4 · structured evidence, bounded and stable', () => {
     expect(structured.error).toContain('Unsupported key exchange');
     expect(structured.failedTests).toHaveLength(2);
   });
+
+  /**
+   * A compile failure has no failing tests to describe it — the compiler error
+   * *is* the evidence, and it only exists in the log.
+   *
+   * The full log lives in blob storage and that read can come back empty. When
+   * it did, the agent was handed `error: "mvn -B verify exited 1"` and
+   * `relevant_logs: []`: asked to repair a build, told nothing about it. The
+   * lines it needed were on the ExecutionRun in Mongo the whole time.
+   */
+  it('diagnoses a compile failure from the stored excerpt when the log is unavailable', () => {
+    const compilerErrors = [
+      '[ERROR] COMPILATION ERROR :',
+      '[ERROR] /w/src/main/java/pay/legacy/LegacySettlementExporter.java:[42,38] '
+        + 'cannot find symbol',
+      '[ERROR]   symbol:   method sha256Hex(java.lang.String)',
+      '[ERROR]   location: class pay.util.CryptoUtils',
+      '[INFO] BUILD FAILURE',
+    ];
+
+    const structured = structureFailure({
+      // Nothing ran, so no reports — exactly what a broken compile leaves.
+      execution: execution({ logExcerpt: compilerErrors, exitCode: 1, status: 'FAILURE' }),
+      inventory: parseReports([]),
+      log: '', // the blob fetch came back empty
+    });
+
+    expect(structured.phase).toBe('BUILD');
+    expect(structured.error).toContain('cannot find symbol');
+    expect(structured.relevantLogs.join('\n')).toContain('sha256Hex');
+    expect(structured.relevantLogs.join('\n')).toContain('CryptoUtils');
+
+    // And it reaches the model in the same shape the feed renders.
+    const json = JSON.parse(failureJson(structured, 1));
+    expect(json.relevant_logs.length).toBeGreaterThan(0);
+    expect(json.error).not.toMatch(/^mvn .* exited/);
+  });
+
+  it('still prefers the real log when one was retrieved', () => {
+    const structured = structureFailure({
+      execution: execution({ logExcerpt: ['[ERROR] a stale excerpt'] }),
+      inventory: parseReports([]),
+      log: '[ERROR] the actual log\n[ERROR] cannot find symbol\n',
+    });
+    expect(structured.relevantLogs.join('\n')).toContain('the actual log');
+    expect(structured.relevantLogs.join('\n')).not.toContain('stale excerpt');
+  });
 });
 
 describe('the approved scope is a contract', () => {
@@ -755,6 +802,138 @@ describe('AC-8 · the reference scenario, end to end', () => {
     expect(threads[0]!.status).toBe('RESOLVED');
     expect(threads[0]!.meaningfulAttempts).toBe(1);
   }, 60_000);
+});
+
+describe('a build that did not compile is not a build that passed', () => {
+  /**
+   * The defect that produced a pushed branch whose main sources do not compile,
+   * under the words "36/36 passing · all tests green".
+   *
+   * `mvn verify` stops at `compile`. No tests run, so nothing fails, so
+   * `newFailures` is empty — and the loop forgave a non-zero exit on exactly
+   * that evidence. Worse, `mvn` does not clean, so the JUnit XML still on disk
+   * was the *baseline's*, and the inventory reported someone else's 36 passes
+   * as this run's.
+   *
+   * Two things had to be true for the lie to hold. Both are asserted here.
+   */
+  it('fails an item whose build produced no test results at all', async () => {
+    const { project, run } = await approvedProject(repo.baseCommitSha);
+
+    const runs = [
+      { exitCode: 0, log: 'BUILD SUCCESS' },
+      {
+        exitCode: 0,
+        log: '[INFO] Tests run: 1, Failures: 0\n[INFO] BUILD SUCCESS',
+        reports: [surefireReport('pay.security.SettlementSignerTest', [{ name: 'signs' }])],
+      },
+      // The patch lands and breaks compilation. Maven never reaches the tests,
+      // so there are no reports and no failures — the shape that used to pass.
+      {
+        exitCode: 1,
+        log: '[ERROR] /w/src/main/java/pay/util/CryptoUtils.java:[42,38] cannot find symbol\n'
+          + '[ERROR]   symbol:   method sha256Hex(java.lang.String)\n[INFO] BUILD FAILURE',
+        reports: [],
+      },
+    ];
+    let call = 0;
+    const stepping = {
+      environment: 'CLOUD_BUILD' as const,
+      async run(spec: { command: string }) {
+        void spec;
+        const answer = runs[Math.min(call++, runs.length - 1)]!;
+        return {
+          exitCode: answer.exitCode ?? 0,
+          status: (answer.exitCode ?? 0) === 0 ? 'SUCCESS' as const : 'FAILURE' as const,
+          log: answer.log ?? '',
+          logExcerpt: (answer.log ?? '').split('\n').filter(Boolean),
+          durationMs: 1000,
+          reports: answer.reports ?? [],
+          provider: {},
+        };
+      },
+    };
+
+    const model = new ScriptedModel({
+      'baseline-invariants': {
+        invariants: [{
+          kind: 'API_BEHAVIOR',
+          description: 'POST /settlements accepts a valid advice',
+          assertion: 'assertEquals(201, response.getStatusCode());',
+          capturedFrom: 'EXISTING_TEST',
+        }],
+      },
+      'coverage-assessment': { components: [] },
+      'generate-tests': { artifacts: [] },
+      'migration-patch': {
+        planItemId: 'plan_1', changeType: 'SOURCE',
+        summary: 'Migrate CryptoService to ML-KEM-768',
+        rationale: 'CNSA 2.0 requires ML-KEM for key establishment',
+        findingIds: ['fnd_1'],
+        files: [{
+          path: 'src/main/java/pay/security/CryptoService.java', operation: 'MODIFIED',
+          content: 'package pay.security;\npublic class CryptoService {}\n',
+        }],
+      },
+      'failure-diagnosis': {
+        classification: 'IMPLEMENTATION_DEFECT',
+        rootCause: 'The rewrite of CryptoService removed sha256Hex, which its callers use.',
+        reasoning: 'The compiler names the missing symbol and the file that calls it.',
+        withinAutonomousBoundary: true,
+        baselineRequirementChanged: false,
+        proposedAction: 'Restore the removed helpers alongside the migrated transport.',
+        confidence: 0.9,
+      },
+      'migration-repair': {
+        changeType: 'SOURCE',
+        summary: 'Restore the helpers the migration removed',
+        rationale: 'The rewrite dropped methods its callers still use.',
+        files: [{
+          path: 'src/main/java/pay/security/CryptoService.java', operation: 'MODIFIED',
+          content: 'package pay.security;\npublic class CryptoService { }\n',
+        }],
+      },
+    });
+
+    const outcome = await runTestEngineering(project, run, {
+      repos: t.repos,
+      projects: null as never,
+      engine,
+      model,
+      executor: stepping,
+      blobs: new InMemoryBlobStore(),
+      logger,
+      workdir: repo.dir,
+    });
+
+    const loop = outcome.loop!;
+    // The one thing that must never happen: reporting this item complete.
+    expect(loop.completed).not.toContain('plan_1');
+
+    const events = await t.repos.events.since(project.projectId, 0);
+    expect(events.some((e) => e.type === 'TEST_PASSED')).toBe(false);
+    expect(events.some((e) => e.type === 'TEST_FAILED')).toBe(true);
+  }, 60_000);
+
+  it('discards the previous run’s reports before running, so none can be inherited', async () => {
+    const { discardReports, collectReports } = await import(
+      '../src/integrations/cloudbuild/executor');
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+
+    // A previous run's green result, sitting exactly where Maven left it.
+    await mkdir(join(repo.dir, 'target/surefire-reports'), { recursive: true });
+    await writeFile(
+      join(repo.dir, 'target/surefire-reports/TEST-pay.StaleTest.xml'),
+      surefireReport('pay.StaleTest', [{ name: 'passes' }]).xml,
+    );
+    expect(await collectReports(repo.dir)).toHaveLength(1);
+
+    await discardReports(repo.dir);
+    // A compile failure now yields an empty inventory rather than the last
+    // run's passes, which is what makes `testsRan` mean anything.
+    expect(await collectReports(repo.dir)).toHaveLength(0);
+  });
 });
 
 describe('a change set is judged once, when all of it has landed', () => {

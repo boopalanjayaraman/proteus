@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { Baseline, PlanItem } from '@proteus/schema';
 import type { ModelClient } from '../model';
+import { apiSurfaceLines, type ApiMember } from '../../core/migration/apiSurface';
 import {
   CoverageAssessmentInput, GeneratedTestInput, InvariantInput,
 } from '../tools/registry';
@@ -29,6 +30,15 @@ export interface RepositoryContext {
 }
 
 export interface MigrationContext {
+  /**
+   * Signatures of every public class in the repository.
+   *
+   * `sources` carries only the paths the plan authorises, which is right for
+   * what may be edited and wrong for what a test has to CALL. Without this the
+   * agent wrote `new SettlementSigner()` against a constructor taking a
+   * `SigningKeyProvider` — a class it had never been shown.
+   */
+  apiSurface?: ApiMember[];
   planItems: PlanItem[];
   /** The target the plan approved — the sizes to assert follow from it. */
   target?: { target: string; parameterSet?: string };
@@ -161,6 +171,7 @@ export class TestEngineeringAgent {
         '',
         'The components under migration:',
         ...migration.sources.map((s) => `--- ${s.path}\n${s.excerpt}`),
+        ...apiSurfaceLines(migration.apiSurface ?? []),
         '',
         'A CHARACTERIZATION TEST PINS BEHAVIOUR THE MIGRATION MUST PRESERVE.',
         '  It must never assert the current value of something the approved plan changes.',
