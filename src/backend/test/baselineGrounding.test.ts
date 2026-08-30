@@ -128,3 +128,43 @@ describe('an acceptance test is not a regression', () => {
       .toBe('pay.security.KeyTransportServiceTest');
   });
 });
+
+describe('the approved scope is a contract, and the glob has to read it correctly', () => {
+  /**
+   * `**\/pom.xml` compiled to `^.*\/pom\.xml$` — a pattern requiring a slash, so
+   * it matched `a/pom.xml` and never the root `pom.xml`.
+   *
+   * A deployed run was lost to it. The assessment declared `**\/pom.xml` for the
+   * Bouncy Castle upgrade, the agent edited the root `pom.xml`, and a change
+   * squarely inside the approved scope was refused as a breach. That opened a
+   * blocking gate, `NO_CRITICAL_BLOCKER` failed, and a correct migration was
+   * reported unverified. The same plan phrased as a bare `pom.xml` had succeeded
+   * an hour earlier, which is exactly what made it look environmental.
+   */
+  const item = { targetName: 'Dependency Upgrade' } as never;
+
+  it('matches the root file, which is the case that cost a run', async () => {
+    const { assertWithinScope } = await import('../src/worker/migrationLoop');
+    expect(() => assertWithinScope(['pom.xml'], ['**/pom.xml'], item)).not.toThrow();
+  });
+
+  it('still matches at any depth', async () => {
+    const { assertWithinScope } = await import('../src/worker/migrationLoop');
+    expect(() => assertWithinScope(
+      ['a/pom.xml', 'a/b/pom.xml'], ['**/pom.xml'], item)).not.toThrow();
+    expect(() => assertWithinScope(
+      ['src/main/java/pay/security/PartnerKeys.java'],
+      ['**/PartnerKeys.java'], item)).not.toThrow();
+  });
+
+  it('has not become permissive — a single star stops at the boundary', async () => {
+    const { assertWithinScope, PatchRefused } = await import('../src/worker/migrationLoop');
+    expect(() => assertWithinScope(
+      ['src/main/java/pay/security/x/Foo.java'],
+      ['src/main/java/pay/security/*.java'], item)).toThrow(PatchRefused);
+    // And a literal path is still literal.
+    expect(() => assertWithinScope(['other/pom.xml'], ['pom.xml'], item)).toThrow(PatchRefused);
+    // The suffix still has to match.
+    expect(() => assertWithinScope(['pom.xml.bak'], ['**/pom.xml'], item)).toThrow(PatchRefused);
+  });
+});

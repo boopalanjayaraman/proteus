@@ -42,4 +42,16 @@ install -d -o proteus -g proteus /opt/proteus
 # Pre-pull the build toolchain so the first migration does not pay for it.
 docker pull maven:3.9-eclipse-temurin-17 || true
 
+# The Maven cache volume, owned by the account that will write to it.
+#
+# Builds run with `--user`, because a container writing as root leaves a
+# root-owned target/ in the bind-mounted checkout that the service account then
+# cannot delete. The same constraint applies to the cache: Docker creates a
+# named volume owned by root, and a non-root container cannot write into it, so
+# every build would re-download the world and log a warning about it.
+PROTEUS_UID=$(id -u proteus)
+PROTEUS_GID=$(id -g proteus)
+docker volume create proteus-m2 >/dev/null
+docker run --rm -v proteus-m2:/m2 alpine chown -R "$PROTEUS_UID:$PROTEUS_GID" /m2 || true
+
 touch /var/log/proteus-startup-complete

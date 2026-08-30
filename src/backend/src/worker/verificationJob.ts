@@ -257,6 +257,13 @@ async function gather(
 ): Promise<Context> {
   const { repos } = deps;
 
+  // What the branch contains right now, so a withdrawn artifact stops being
+  // required. Deduped, because one file can be written by several changes.
+  const present = new Set(
+    (await new WorkingCopy(deps.workdir).files().catch(() => [])).map((f) => f.path),
+  );
+  const onDisk = (paths: string[]): string[] => [...new Set(paths)].filter((p) => present.has(p));
+
   const [baseline, assessment, changes, gates, findings] = await Promise.all([
     repos.baselines.findOne({ migrationRunId: run.migrationRunId } as never),
     repos.assessments.findOne({ assessmentId: run.approval.assessmentId } as never),
@@ -295,12 +302,23 @@ async function gather(
     generated: {
       // Suites, not files: one file produces many test methods and the check is
       // "did every method in this suite pass".
-      characterization: testChanges
+      //
+      // Only suites still IN THE TREE. `testChanges` is every change with
+      // `changeType: 'TEST'`, which includes the commit that *withdraws* an
+      // artifact under `EXEC-TEST-001` — so a test the rules removed stayed on
+      // the required list, could never run, and failed `REQUIRED_TESTS_PASSED`
+      // for the rest of the run. A deployed migration was reported unverified
+      // for `pay.security.KeyTransportCharacterizationTest`, a file the system
+      // had itself deleted two steps earlier.
+      //
+      // Existence on disk rather than bookkeeping about which commit undid
+      // which: the contract is what the branch actually contains.
+      characterization: onDisk(testChanges
         .filter((c) => c.changeType === 'TEST' && !/kem|mlkem|pqc|acceptance/i.test(c.summary))
-        .flatMap((c) => c.files.map((f) => suiteOf(f.path))),
-      acceptance: testChanges
+        .flatMap((c) => c.files.map((f) => f.path))).map(suiteOf),
+      acceptance: onDisk(testChanges
         .filter((c) => c.changeType === 'TEST' && /kem|mlkem|pqc|acceptance/i.test(c.summary))
-        .flatMap((c) => c.files.map((f) => suiteOf(f.path))),
+        .flatMap((c) => c.files.map((f) => f.path))).map(suiteOf),
     },
     ...(targetOf(approvedItems) ? { target: targetOf(approvedItems)! } : {}),
   };

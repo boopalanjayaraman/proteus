@@ -183,6 +183,32 @@ export class ProcessExecutor implements BuildExecutor {
 
   private commandLine(spec: ExecutionSpec): [string, string[]] {
     if (!this.containerImage) return ['sh', ['-lc', spec.command]];
+
+    /*
+     * Run as the calling user, not as root.
+     *
+     * A Linux bind mount preserves uids literally, so a container running as
+     * root writes a root-owned `target/` into the working copy — and the
+     * service account that owns the checkout then cannot delete it. The run
+     * ends with `EACCES: permission denied, rmdir .../target/classes` and the
+     * migration job dies after a build that actually succeeded.
+     *
+     * It cannot be reproduced on a developer's Mac: Docker Desktop maps the
+     * container's root to the host user, so the files come back owned by
+     * whoever started the run. This surfaced only once it ran on a VM.
+     *
+     * `HOME` moves with the user, or Maven writes its cache to a `/root` it can
+     * no longer read, and `-v proteus-m2:/root/.m2` stops being the warm cache
+     * it exists to be.
+     */
+    const asUser = process.getuid && process.getgid
+      ? [
+          '--user', `${process.getuid()}:${process.getgid()}`,
+          '-e', 'HOME=/tmp/maven-home',
+          '-v', 'proteus-m2:/tmp/maven-home/.m2',
+        ]
+      : ['-v', 'proteus-m2:/root/.m2'];
+
     return [
       'docker',
       [
@@ -190,7 +216,7 @@ export class ProcessExecutor implements BuildExecutor {
         '-v', `${spec.workdir}:/workspace`,
         // A warm dependency cache is the difference between a 30-second
         // baseline and a four-minute one, and the demo runs the loop repeatedly.
-        '-v', 'proteus-m2:/root/.m2',
+        ...asUser,
         '-w', '/workspace',
         this.containerImage,
         'sh', '-lc', spec.command,

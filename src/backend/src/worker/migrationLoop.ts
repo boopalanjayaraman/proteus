@@ -933,6 +933,18 @@ export function assertWithinScope(
  * of `src/main/java/pay/security/*.java` expects. Built by walking the glob
  * rather than by chained replaces, so a literal escaped in one pass cannot be
  * re-interpreted by the next.
+ *
+ * `**\/` matches ZERO or more directories, which is the whole point of the
+ * form and the case this used to get wrong. `**` alone became `.*` and the
+ * following slash stayed literal, so `**\/pom.xml` compiled to `^.*\/pom\.xml$`
+ * — matching `a/pom.xml` but never `pom.xml`.
+ *
+ * A run was lost to it. The assessment declared `**\/pom.xml` for the dependency
+ * upgrade, the agent edited the root `pom.xml`, and a change squarely inside the
+ * approved scope was refused as a scope breach. That opened a blocking gate,
+ * `NO_CRITICAL_BLOCKER` failed, and the migration was reported unverified — for
+ * a patch that was correct. The same plan phrased as a bare `pom.xml` had
+ * succeeded an hour earlier, which is what made it look environmental.
  */
 function toPattern(glob: string): RegExp {
   const SPECIAL = '.+^${}()|[]\\?';
@@ -941,8 +953,14 @@ function toPattern(glob: string): RegExp {
     const c = glob[i]!;
     if (c === '*') {
       if (glob[i + 1] === '*') {
-        out += '.*';
-        i++;
+        if (glob[i + 2] === '/') {
+          // The directory segment is optional, so `**/x` matches `x`.
+          out += '(?:.*/)?';
+          i += 2;
+        } else {
+          out += '.*';
+          i++;
+        }
       } else {
         out += '[^/]*';
       }

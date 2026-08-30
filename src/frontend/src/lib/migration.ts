@@ -574,6 +574,12 @@ export function progressFromEvents(
       const seconds = /([\d.]+)s/.exec(e.message ?? '');
       if (seconds) row.seconds = Number(seconds[1]);
       if (row.state === 'FAILED') lastFailed = row;
+      // The feed spans every build in the run, so a suite that failed before an
+      // item landed and passes after it keeps the earlier methods otherwise —
+      // rendering `peerKeyUsesTheApprovedAlgorithm … found RSA` in red beneath a
+      // green tick, on a migration that verified. A method name only describes
+      // the build that produced it.
+      else row.failed = [];
     }
     bySuite.set(name, row);
   }

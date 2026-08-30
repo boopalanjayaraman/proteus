@@ -1440,3 +1440,54 @@ describe('source compatibility does not mean keeping the old algorithm', () => {
     expect(SCOPE_COMPATIBILITY.join('\n')).toContain('PROHIBITED_CRYPTO_ABSENT');
   });
 });
+
+describe('a suite that passes shows no failures from an earlier build', () => {
+  /**
+   * A run rebuilds after every plan item. `ProteusKeyTransportRoundTripTest`
+   * fails while the migration is in transit — `expected ML-KEM-768, found RSA`
+   * is the truth until the last item lands — and passes at the end.
+   *
+   * The tracker kept the earlier failing methods across that transition, so the
+   * finished screen rendered a red assertion underneath a green tick on a
+   * migration that verified. A method name describes the build that produced
+   * it, and nothing else.
+   */
+  it('clears the failing methods when the suite goes green', async () => {
+    const { ProgressTracker } = await import('../src/core/migration/progress');
+    const tracker = new ProgressTracker({ suites: 1, tests: 2, known: true });
+    const suite = 'pay.ProteusKeyTransportRoundTripTest';
+
+    tracker.apply({ kind: 'SUITE_STARTED', suite, group: 'NEW_EVIDENCE' });
+    tracker.apply({ kind: 'TEST_FAILED', suite, method: 'peerKeyUsesTheApprovedAlgorithm', seconds: 0.4 });
+    tracker.apply({
+      kind: 'SUITE_FINISHED', suite, group: 'NEW_EVIDENCE',
+      total: 2, failures: 1, errors: 0, skipped: 0, seconds: 4.5, passed: false,
+    });
+    expect(tracker.snapshot().suites[0]!.failed.map((f) => f.method))
+      .toEqual(['peerKeyUsesTheApprovedAlgorithm']);
+
+    // The next build, after the remaining plan item lands.
+    tracker.apply({ kind: 'SUITE_STARTED', suite, group: 'NEW_EVIDENCE' });
+    tracker.apply({
+      kind: 'SUITE_FINISHED', suite, group: 'NEW_EVIDENCE',
+      total: 2, failures: 0, errors: 0, skipped: 0, seconds: 4.3, passed: true,
+    });
+
+    const row = tracker.snapshot().suites[0]!;
+    expect(row.state).toBe('PASSED');
+    expect(row.failed).toEqual([]);
+  });
+
+  it('keeps them while the suite is still failing', async () => {
+    const { ProgressTracker } = await import('../src/core/migration/progress');
+    const tracker = new ProgressTracker({ suites: 1, tests: 2, known: true });
+    const suite = 'pay.security.KeyTransportServiceTest';
+    tracker.apply({ kind: 'SUITE_STARTED', suite, group: 'REGRESSION_SURFACE' });
+    tracker.apply({ kind: 'TEST_FAILED', suite, method: 'placesSomethingOnTheWire', seconds: 0.1 });
+    tracker.apply({
+      kind: 'SUITE_FINISHED', suite, group: 'REGRESSION_SURFACE',
+      total: 4, failures: 1, errors: 0, skipped: 0, seconds: 0.07, passed: false,
+    });
+    expect(tracker.snapshot().suites[0]!.failed).toHaveLength(1);
+  });
+});

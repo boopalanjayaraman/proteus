@@ -286,7 +286,13 @@ export class ProgressTracker {
           total: event.total,
           failures: event.failures + event.errors,
           seconds: event.seconds,
-          failed: existing?.failed ?? [],
+          // Cleared when the suite passes. A run rebuilds after every plan item,
+          // so a suite that failed mid-migration and passes at the end kept its
+          // old failing methods and rendered them, in red, underneath a green
+          // tick — `peerKeyUsesTheApprovedAlgorithm … found RSA` sitting under a
+          // suite marked ✓, on a migration that verified. The names are only
+          // meaningful for the build that produced them.
+          failed: event.passed ? [] : existing?.failed ?? [],
         });
         break;
       }

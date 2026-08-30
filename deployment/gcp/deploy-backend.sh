@@ -27,6 +27,29 @@ done
 $SSH "test -f /var/log/proteus-startup-complete" \
   || { echo "startup script has not finished; check the serial console" >&2; exit 1; }
 
+# --- refuse to interrupt a live migration -----------------------------------
+#
+# Migration jobs run unawaited inside the API process (TD-010), so `systemctl
+# restart` kills whatever is mid-build. Nothing resumes it: the lease expires,
+# `findOrphans` can see it, and no worker acts on it. The project sits at
+# MIGRATING for ever.
+#
+# A deploy at 17:40 UTC killed PQC-0025 in RUNNING_TESTS exactly this way.
+#
+# A build container is the reliable signal that work is in flight — the loop
+# spends nearly all its time inside `docker run maven`. Not a proof of absence:
+# a run between builds shows nothing here. It catches the case that actually
+# happened, and DEPLOY_FORCE=1 is there for when you know better.
+if [ "${DEPLOY_FORCE:-0}" != "1" ]; then
+  BUILDING=$($SSH "sudo docker ps --filter ancestor=maven:3.9-eclipse-temurin-17 --format '{{.ID}}' | wc -l" 2>/dev/null | tr -d '\r\n ' || echo 0)
+  if [ "${BUILDING:-0}" != "0" ]; then
+    echo "REFUSING: a migration build is running on $NAME." >&2
+    echo "Restarting now would kill it mid-run and it will not resume." >&2
+    echo "Wait for it to finish, or re-run with DEPLOY_FORCE=1 to override." >&2
+    exit 1
+  fi
+fi
+
 # --- source ----------------------------------------------------------------
 # A git archive of the working tree, so what deploys is what is on disk here —
 # including uncommitted work. Faster and more predictable than cloning and
