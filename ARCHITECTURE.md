@@ -52,7 +52,8 @@ Everything left of the gate is read-only and enforced structurally: before appro
 ├──────────────────────────────────────────────────────────────────────┤
 │  integrations/   github/ (reader + writer)   storage/ (GCS blobs)    │
 │                  secrets/ (Secret Manager)   cloudbuild/ (executor)  │
-│                  cloudrun/ (sandbox deployer) gcp/ (transport)       │
+│                  cloudrun/ (sandbox deployer — LOCAL Docker is the   │
+│                             live path; Cloud Run is §12) gcp/        │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -304,7 +305,7 @@ src/backend/     API, agent, core, worker, verification
 src/frontend/    React SPA
 engine/          114 rules (YAML) + provider capability data
 fixtures/        payments-api (40 files) · settlement-api (12 files)
-prds/            18 PRDs — each written before its increment
+prds/            17 PRDs — each written before its increment
 deployment/      GCP provisioning and deploy scripts
 fixes/           post-mortems, grouped by mistake rather than by file
 ```
