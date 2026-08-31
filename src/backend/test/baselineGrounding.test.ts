@@ -168,3 +168,51 @@ describe('the approved scope is a contract, and the glob has to read it correctl
     expect(() => assertWithinScope(['pom.xml.bak'], ['**/pom.xml'], item)).toThrow(PatchRefused);
   });
 });
+
+describe('the loop and the verifier read the approved scope the same way', () => {
+  /**
+   * They had separate copies of `toPattern`. The zero-directory `**\/` case was
+   * fixed in the loop's and not the verifier's, so PQC-0030 passed the loop's
+   * scope check, migrated correctly, went green on all 40 tests — and was then
+   * failed by `MIGRATION_POLICY_SATISFIED` for "3 file(s) changed outside the
+   * approved scope", naming the three files the plan had explicitly authorised.
+   *
+   * The plan declared `src/main/java/pay/security/**\/*.java`; the flagged files
+   * were exactly those with no directory between the `**` and the filename.
+   */
+  it('is the same function, not two that agree today', async () => {
+    const loop = await import('../src/core/migration/glob');
+    const verifier = await import('../src/verification/checks/scope');
+    expect(verifier.toPattern).toBe(loop.toPattern);
+  });
+
+  it('matches a file sitting directly under the ** — the case that failed', async () => {
+    const { toPattern } = await import('../src/core/migration/glob');
+    const p = toPattern('src/main/java/pay/security/**/*.java');
+    expect(p.test('src/main/java/pay/security/PartnerKeyProvider.java')).toBe(true);
+    expect(p.test('src/main/java/pay/security/CryptoService.java')).toBe(true);
+    // and still at depth
+    expect(p.test('src/main/java/pay/security/inner/Thing.java')).toBe(true);
+    // and still refuses what is genuinely outside
+    expect(p.test('src/main/java/pay/util/CryptoUtils.java')).toBe(false);
+  });
+
+  it('accepts the exact PQC-0030 scope that was wrongly rejected', async () => {
+    const { toPattern } = await import('../src/core/migration/glob');
+    const declared = [
+      'pom.xml',
+      'src/main/java/pay/security/**/*.java',
+      'src/main/java/pay/util/**/*.java',
+      'src/test/java/**/*.java',
+    ];
+    const changed = [
+      'pom.xml',
+      'src/main/java/pay/security/PartnerKeyProvider.java',
+      'src/main/java/pay/security/CryptoService.java',
+      'src/main/java/pay/util/CryptoUtils.java',
+      'src/test/java/pay/PartnerHandshakeMock.java',
+    ];
+    const outside = changed.filter((c) => !declared.some((d) => toPattern(d).test(c)));
+    expect(outside).toEqual([]);
+  });
+});

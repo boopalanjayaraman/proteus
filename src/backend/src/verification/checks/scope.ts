@@ -20,32 +20,12 @@ export interface ScopeBreach {
 }
 
 /**
- * A declared path pattern, as a matcher.
- *
- * `*` stops at a directory boundary and `**` crosses one. Built by walking the
- * glob rather than by chained replaces, so a literal escaped in one pass cannot
- * be re-interpreted by the next.
+ * Re-exported so the existing callers and tests keep working, while there is
+ * only one definition. See `core/migration/glob.ts` for why that matters.
  */
-export function toPattern(glob: string): RegExp {
-  const SPECIAL = '.+^${}()|[]\\?';
-  let out = '';
-  for (let i = 0; i < glob.length; i++) {
-    const c = glob[i]!;
-    if (c === '*') {
-      if (glob[i + 1] === '*') {
-        out += '.*';
-        i++;
-      } else {
-        out += '[^/]*';
-      }
-    } else if (SPECIAL.includes(c)) {
-      out += `\\${c}`;
-    } else {
-      out += c;
-    }
-  }
-  return new RegExp(`^${out}$`);
-}
+import { toPattern } from '../../core/migration/glob';
+
+export { toPattern };
 
 /**
  * Every path the run touched, against everything the approved plan declared.
