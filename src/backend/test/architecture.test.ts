@@ -112,6 +112,65 @@ describe('architectural boundaries', () => {
     expect(offenders, 'the agent is reachable from worker/ and server.ts only').toEqual([]);
   });
 
+  /**
+   * The subject of a guardrail never supplies its input.
+   *
+   * `guardTestArtifact` opens by saying so — "a guardrail the subject can argue
+   * with is not a guardrail" — and for one field it did exactly that.
+   * `testIntegrity.baselineRequirementChanged` gates EXEC-MOCK-001, and it
+   * arrived from the agent proposing the edit, as an unexplained boolean with no
+   * prose anywhere in the prompt to anchor it.
+   *
+   * What that produced, measured across every run in the database:
+   *
+   *   generated acceptance tests   11 of 12 declared `true` — about files that
+   *                                did not exist yet, so nothing could rely on
+   *                                them. Each `true` refused the artifact.
+   *   the same mock, PQC-0028      `true`, `false`, `true` in one run, minutes
+   *                                apart. Two gates, one per `true`.
+   *
+   * So this asserts the shape rather than the behaviour: an author schema may
+   * describe what it did and may not adjudicate whether it was allowed to. Both
+   * fields are now composed by the orchestrator from the classification and the
+   * path. A future field of this kind fails the build here rather than a demo.
+   */
+  it('never asks an authoring agent to adjudicate its own guardrail', async () => {
+    const registry = await readFile(join(SRC, 'agent/tools/registry.ts'), 'utf8');
+
+    // The author schemas: the agent that writes the file. `DiagnosisInput` is
+    // deliberately absent — A4 holds no write tool and did not author the patch
+    // it judges, which is the whole reason the split exists, and its answer is
+    // additionally floored by `confidence` under EXEC-DIAG-008.
+    const AUTHORING = ['GeneratedTestInput', 'RepairInput', 'MigrationPatchInput'];
+    const SELF_ADJUDICATING = [
+      'baselineRequirementChanged', 'safeAutonomousModification',
+      'withinAutonomousBoundary', 'testIntegrity',
+    ];
+
+    const offenders: string[] = [];
+    for (const name of AUTHORING) {
+      const start = registry.indexOf(`export const ${name} = z.object(`);
+      if (start === -1) continue; // renamed or removed; the other cases still hold
+      const next = registry.indexOf('\nexport const ', start + 1);
+      const body = registry.slice(start, next === -1 ? undefined : next);
+
+      // Comments explain the removal and name the fields; only the schema counts.
+      const fields = body
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/[^\n]*/g, '');
+
+      for (const field of SELF_ADJUDICATING) {
+        if (new RegExp(`\\b${field}\\s*:`).test(fields)) offenders.push(`${name}.${field}`);
+      }
+    }
+
+    expect(
+      offenders,
+      'an authoring agent may describe what it did, never rule on whether it was permitted — '
+        + 'compose these in the orchestrator from the classification or the path',
+    ).toEqual([]);
+  });
+
   it('has no compiled JavaScript shadowing the shared schema source', async () => {
     // Vite resolves `.js` before `.ts`, so a `migration.js` emitted beside
     // `migration.ts` silently becomes what every workspace imports — including

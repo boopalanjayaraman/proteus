@@ -14,7 +14,23 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 IP=$(gcloud compute instances describe "$NAME" --zone="$ZONE" --project="$PROJECT" \
   --format="value(networkInterfaces[0].accessConfigs[0].natIP)")
 HOST="${IP//./-}.nip.io"
-SSH="gcloud compute ssh $NAME --zone=$ZONE --project=$PROJECT --command"
+# Every ssh carries a deadline.
+#
+# `gcloud compute ssh` inherits ssh's default of waiting for ever, and the
+# startup-probe loop below runs it sixty times. On 2026-08-31 one call hung on
+# an established connection and the deploy sat in the probe loop for 61 minutes
+# without packing a byte — while reporting nothing, because the loop cannot tell
+# "not ready yet" from "never coming back".
+#
+# ServerAlive turns a dead connection into a failed command in ~15s, which the
+# retry loop already knows how to handle. macOS has no coreutils `timeout`, so
+# this has to come from ssh itself.
+SSH_FLAGS=(
+  --ssh-flag=-oConnectTimeout=15
+  --ssh-flag=-oServerAliveInterval=5
+  --ssh-flag=-oServerAliveCountMax=3
+)
+SSH="gcloud compute ssh $NAME --zone=$ZONE --project=$PROJECT ${SSH_FLAGS[*]} --command"
 
 echo "deploying to $NAME ($IP) — API will be https://$HOST"
 

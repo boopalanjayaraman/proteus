@@ -245,13 +245,37 @@ export async function runTestEngineering(
     const kinds = new Map<string, GeneratedTestInput['testKind']>();
 
     for (const artifact of artifacts) {
+      /*
+       * The integrity record spec §26 requires, composed here rather than asked
+       * of the agent that wants the file written.
+       *
+       * The agent supplies the narrative — its own `rationale`, verbatim. The
+       * two fields that decide whether the artifact may be written are not
+       * questions it is asked, because they are not questions: these artifacts
+       * come from `uncovered`, so the classification is TEST_COVERAGE_GAP by
+       * construction, and adding coverage a repository lacks changes no
+       * requirement that repository already relies on.
+       *
+       * What actually guards the WEAKENED CONTRACT case is EXEC-TEST-007, which
+       * refuses an artifact whose *content* carries a MUST_PRESERVE assertion —
+       * matched on the assertion text, which is evidence rather than a claim
+       * about evidence. That is untouched, and it is the half that was ever
+       * doing the work.
+       */
+      const integrity = {
+        failureClassification: 'TEST_COVERAGE_GAP' as const,
+        reason: artifact.rationale,
+        baselineRequirementChanged: false,
+        safeAutonomousModification: true,
+      };
+
       const proposal: ProposedTestArtifact = {
         path: artifact.path,
         changeType: artifact.changeType,
         testKind: artifact.testKind,
         content: artifact.content,
         ...(artifact.mockTarget ? { mockTarget: artifact.mockTarget } : {}),
-        ...(artifact.testIntegrity ? { testIntegrity: artifact.testIntegrity } : {}),
+        testIntegrity: integrity,
       };
 
       // The approved paths are known before any test is written, so a
@@ -296,10 +320,9 @@ export async function runTestEngineering(
         commitMessage: `test(pqc): ${artifact.summary}`,
         findingIds: artifact.findingIds,
         planItemIds: artifact.planItemIds,
-        // Every TEST/MOCK/FIXTURE change carries one. The guard has already
-        // refused any artifact that arrived without it, so this is the record
-        // the agent supplied rather than one invented here.
-        ...(artifact.testIntegrity ? { testIntegrity: artifact.testIntegrity } : {}),
+        // The record the guard actually judged, so the audit trail and the
+        // decision agree rather than merely resembling each other.
+        testIntegrity: integrity,
       });
 
       written.push(artifact.path);

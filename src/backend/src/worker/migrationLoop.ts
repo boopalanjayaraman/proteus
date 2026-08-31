@@ -724,6 +724,38 @@ async function applyRepair(
     priorAttempts,
   });
 
+  /*
+   * The integrity record the guard is shown, and the one that is committed.
+   *
+   * Composed from the classification, which is where the answer already lives.
+   * A repair reaches this function only after `classify` has established
+   * whether a baseline requirement changed — a diagnosis that says it did
+   * raises a gate rather than returning a repairable classification — so the
+   * author has nothing left to decide and is no longer asked.
+   *
+   * It used to supply this record itself, and PQC-0028 is what that was worth:
+   * three repair calls against the same mock, minutes apart, answering `true`,
+   * `false`, `true`. Two `MATERIAL_ARCHITECTURE_DECISION` gates, one per `true`.
+   * PQC-0029 drew `false` and finished green; PQC-0031 drew `true` and stopped
+   * with a correct patch already written.
+   *
+   * EXEC-TEST-007 still gates the case that matters: an artifact that softens a
+   * MUST_PRESERVE assertion is refused on the assertion text, which is evidence
+   * rather than opinion.
+   */
+  const integrity = /^(TEST|MOCK|FIXTURE)$/.test(repair.changeType)
+    ? {
+        failureClassification: last.classification.classification,
+        // The agent's own words for the record; none of its judgements.
+        reason: repair.rationale.split('\n')[0]
+          ?? last.classification.rationale.split('\n')[0] ?? last.classification.ruleId,
+        // Asserted by the rule where the rule knows, rather than left to the
+        // agent that wants the edit permitted.
+        baselineRequirementChanged: last.classification.baselineRequirementChanged ?? false,
+        safeAutonomousModification: true,
+      }
+    : undefined;
+
   // A repair to a test, mock or fixture goes through the same guard a generated
   // test does. This is the path spec §26 is actually about — the agent under
   // pressure to make a red suite green.
@@ -734,7 +766,7 @@ async function applyRepair(
       changeType: repair.changeType,
       testKind: repair.changeType === 'MOCK' ? 'MOCK' : 'CHARACTERIZATION',
       content: f.content,
-      ...(repair.testIntegrity ? { testIntegrity: repair.testIntegrity } : {}),
+      ...(integrity ? { testIntegrity: integrity } : {}),
     }, { invariants: baseline.invariants });
 
     if (!verdict.allowed) {
@@ -745,18 +777,6 @@ async function applyRepair(
   }
 
   for (const f of repair.files) await deps.git.writeFile(f.path, f.content);
-
-  const integrity = repair.testIntegrity ?? (
-    /^(TEST|MOCK|FIXTURE)$/.test(repair.changeType)
-      ? {
-          failureClassification: last.classification.classification,
-          reason: last.classification.rationale.split('\n')[0] ?? last.classification.ruleId,
-          // Asserted by the rule where the rule knows, rather than left to the
-          // agent that wants the edit permitted.
-          baselineRequirementChanged: last.classification.baselineRequirementChanged ?? false,
-          safeAutonomousModification: true,
-        }
-      : undefined);
 
   const change = await deps.recorder.commit({
     run, attempt,

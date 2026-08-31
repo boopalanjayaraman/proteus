@@ -234,15 +234,19 @@ export const GeneratedTestInput = z.object({
   mockTarget: z.string().optional(),
   findingIds: z.array(z.string()).default([]),
   planItemIds: z.array(z.string()).default([]),
-  /** Spec §26 — classification comes before the edit, not after it. */
-  testIntegrity: z
-    .object({
-      failureClassification: FailureClassification,
-      reason: z.string().min(1),
-      baselineRequirementChanged: z.boolean(),
-      safeAutonomousModification: z.boolean(),
-    })
-    .optional(),
+  /*
+   * No `testIntegrity`. Spec §26 still requires the record — the orchestrator
+   * composes it (`migrationJob`), because the author is the one party that
+   * cannot be asked.
+   *
+   * It used to be here, and the field `EXEC-MOCK-001` gates on arrived as an
+   * unexplained boolean with no prose to anchor it. Across ten runs the model
+   * answered `baselineRequirementChanged: true` for 11 of 12 generated
+   * acceptance tests — files that did not exist yet, and so could not have
+   * changed a requirement anything relied on. It was reading the question as
+   * "is this migration changing behaviour", which is true of every acceptance
+   * test ever written. Each `true` refused the artifact as a human decision.
+   */
 });
 export type GeneratedTestInput = z.infer<typeof GeneratedTestInput>;
 
@@ -330,15 +334,20 @@ export const RepairInput = z.object({
   summary: z.string().min(1),
   rationale: z.string().min(1),
   changeType: ChangeType,
-  /** Required for TEST/MOCK/FIXTURE — spec §26, classification before the edit. */
-  testIntegrity: z
-    .object({
-      failureClassification: FailureClassification,
-      reason: z.string().min(1),
-      baselineRequirementChanged: z.boolean(),
-      safeAutonomousModification: z.boolean(),
-    })
-    .optional(),
+  /*
+   * No `testIntegrity` here either, and for a sharper reason.
+   *
+   * A repair is only attempted once `classify` has established whether a
+   * baseline requirement changed — a diagnosis that says it did raises a gate
+   * instead of authorising a repair. So by the time this agent is called the
+   * answer exists, deterministically, and asking again can only agree or
+   * contradict.
+   *
+   * PQC-0028 did both. Three repair calls, same file, same prompt, minutes
+   * apart: `true`, `false`, `true`. Two gates, one for each `true`. PQC-0029
+   * drew `false` and finished; PQC-0031 drew `true` and stopped with correct
+   * code already on disk. The field was a coin flip deciding the run.
+   */
 });
 export type RepairInput = z.infer<typeof RepairInput>;
 

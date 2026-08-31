@@ -230,7 +230,10 @@ const scriptedAgent = () => new ScriptedModel({
         testIntegrity: INTEGRITY,
       },
       {
-        // Refused: no testIntegrity record (AC-7).
+        // Supplies no testIntegrity record — and no longer needs to. The
+        // orchestrator composes it, so FR-12 holds by construction instead of
+        // by refusing the agent that forgot. Written, as EXEC-MOCK-003 says a
+        // counterpart mock should be.
         path: 'src/test/java/pay/PartnerHandshakeMock.java',
         changeType: 'MOCK', testKind: 'MOCK',
         content: 'class PartnerHandshakeMock { String keyType() { return "ML_KEM_PUBLIC_KEY"; } }',
@@ -706,19 +709,48 @@ describe('the whole phase, end to end', () => {
     expect(byKind.API_BEHAVIOR).toBe('MUST_PRESERVE');
     expect(byKind.FAILURE_MODE).toBe('MUST_PRESERVE');
 
-    // AC-5, AC-6, AC-7 — three of the four proposals refused, each by its rule.
-    expect(outcome.written).toEqual(['src/test/java/pay/security/CryptoServiceKemTest.java']);
+    // AC-5, AC-6 — the two proposals that construct prohibited evidence are
+    // refused, each by its own rule, on what they contain rather than on what
+    // they say about themselves.
+    expect(outcome.written).toEqual([
+      'src/test/java/pay/security/CryptoServiceKemTest.java',
+      'src/test/java/pay/PartnerHandshakeMock.java',
+    ]);
     expect(outcome.refused.map((r) => r.refusals[0]!.ruleId).sort())
-      .toEqual(['EXEC-MOCK-001', 'EXEC-MOCK-004', 'EXEC-TEST-004']);
+      .toEqual(['EXEC-MOCK-004', 'EXEC-TEST-004']);
 
-    // The one accepted test is committed on the branch, with its record. The
-    // migration patch that follows is PRD-12's and is asserted there.
+    /*
+     * AC-7 — FR-12's record, on every artifact, including the one that arrived
+     * without it.
+     *
+     * This used to assert the opposite: the mock supplied no record and
+     * EXEC-MOCK-001 refused it. That made the requirement contingent on the
+     * agent remembering, and made the field EXEC-MOCK-001 gates on the agent's
+     * to declare — which is how PQC-0028 answered `true`, `false`, `true` about
+     * the same mock in one run and gated itself twice.
+     *
+     * The record is now composed from the classification and the path, so it is
+     * present on every artifact and says the same thing every run. The rules
+     * that refuse on evidence — EXEC-MOCK-004 on a stubbed primitive above,
+     * EXEC-TEST-007 on a MUST_PRESERVE assertion — are untouched.
+     */
+    const testChanges = (await t.repos.migrationChanges.find({
+      projectId: project.projectId,
+    } as never)).filter((c) => ['TEST', 'MOCK', 'FIXTURE'].includes(c.changeType));
+    expect(testChanges).toHaveLength(2);
+    for (const change of testChanges) {
+      const where = change.files.map((f) => f.path).join(',');
+      expect(change.testIntegrity, `${where} carries no record`).toBeDefined();
+      expect(change.testIntegrity!.baselineRequirementChanged).toBe(false);
+    }
+
+    // Both accepted artifacts are committed on the branch, each with its
+    // record. The migration patch that follows is PRD-12's and is asserted
+    // there.
     const changes = await t.repos.migrationChanges.find({ projectId: project.projectId } as never);
     const engineered = changes.filter((c) => c.intent === 'TEST_ENGINEERING');
-    expect(engineered).toHaveLength(1);
-    expect(engineered[0]!.changeType).toBe('TEST');
-    expect(engineered[0]!.testIntegrity?.baselineRequirementChanged).toBe(false);
-    expect(engineered[0]!.commitSha).toBeTruthy();
+    expect(engineered.map((c) => c.changeType)).toEqual(['TEST', 'MOCK']);
+    for (const c of engineered) expect(c.commitSha).toBeTruthy();
 
     const baseline = await t.repos.baselines.findOne({ projectId: project.projectId } as never);
     expect(baseline!.commitSha).toBe(repo.baseCommitSha);
@@ -744,7 +776,8 @@ describe('the whole phase, end to end', () => {
     expect(types).toContain('BASELINE_CAPTURE_STARTED');
     expect(types).toContain('BASELINE_CAPTURE_COMPLETED');
     expect(types).toContain('TEST_CREATED');
-    expect(events.filter((e) => e.type === 'MIGRATION_BLOCKER_IDENTIFIED')).toHaveLength(3);
+    // Two blockers, not three: the mock is no longer refused for paperwork.
+    expect(events.filter((e) => e.type === 'MIGRATION_BLOCKER_IDENTIFIED')).toHaveLength(2);
   }, 60_000);
 });
 

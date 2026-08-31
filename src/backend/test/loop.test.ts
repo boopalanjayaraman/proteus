@@ -634,7 +634,22 @@ describe('AC-8 · the reference scenario, end to end', () => {
    * as the fixture guarantees, the agent repairs it, and the retest is green.
    * One autonomous repair, no human action.
    */
-  it('repairs the partner mock autonomously and finishes green', async () => {
+  /*
+   * Run twice, differing only in what the repair *claims* about itself.
+   *
+   * `baselineRequirementChanged` is the field EXEC-MOCK-001 gates on, and the
+   * agent has no standing to answer it: by the time a repair is attempted the
+   * classification has already established it, and a diagnosis that set it
+   * raises a gate rather than authorising a repair. PQC-0031 is the run where
+   * the model said `true` about an edit its own diagnosis had cleared at 0.98
+   * confidence, and a correct migration ended at a human gate.
+   *
+   * Both cases must reach the same place: repaired, green, no gate, and a
+   * committed record that says `false` because the rule says so.
+   */
+  for (const declared of [false, true]) {
+  it('repairs the partner mock autonomously and finishes green — agent declares '
+    + `baselineRequirementChanged: ${declared}`, async () => {
     const { project, run } = await approvedProject(repo.baseCommitSha);
 
     // The executions this run makes, in order: the baseline build, the baseline
@@ -734,7 +749,7 @@ describe('AC-8 · the reference scenario, end to end', () => {
           failureClassification: 'MOCK_INCOMPATIBILITY',
           reason: 'Mock represents the legacy RSA protocol while the approved migration '
             + 'scope requires ML-KEM.',
-          baselineRequirementChanged: false,
+          baselineRequirementChanged: declared,
           safeAutonomousModification: true,
         },
       },
@@ -802,6 +817,7 @@ describe('AC-8 · the reference scenario, end to end', () => {
     expect(threads[0]!.status).toBe('RESOLVED');
     expect(threads[0]!.meaningfulAttempts).toBe(1);
   }, 60_000);
+  }
 });
 
 describe('a build that did not compile is not a build that passed', () => {
